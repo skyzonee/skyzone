@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkyZone Gaming Station - Management Panel</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        midnight: '#0f172a',
+                        brightyellow: '#facc15',
+                        brand: {
+                            dark: '#0B1221',
+                            accent: '#F9C333'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f1f5f9; }
+        .active-nav { background-color: #facc15 !important; color: #0f172a !important; font-weight: 800; }
+        .tab-content { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .status-finished { border: 4px solid #ef4444 !important; animation: pulse-red 1.5s infinite; }
+        @keyframes pulse-red { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
+        .tabular-nums { font-variant-numeric: tabular-nums; }
+    </style>
+</head>
+<body class="text-slate-900 antialiased">
+
+    <div class="min-h-screen flex flex-col md:flex-row">
+        <!-- Sidebar -->
+        <aside class="w-full md:w-72 bg-brand-dark text-white p-6 flex-shrink-0 z-20 flex flex-col">
+            <div class="flex items-center gap-3 mb-12 p-2">
+                <div class="bg-brand-accent p-2 rounded-lg">
+                    <i class="fas fa-gamepad text-xl text-midnight"></i>
+                </div>
+                <div>
+                    <h1 class="text-lg font-black tracking-tight leading-none uppercase">SKYZONE</h1>
+                    <span class="text-[8px] text-brand-accent font-extrabold tracking-widest uppercase">Gaming Station</span>
+                </div>
+            </div>
+            
+            <nav class="space-y-2 flex-1" id="mainNav">
+                <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest ml-4 mb-2">Main Menu</p>
+                <button onclick="switchTab('dashboard')" id="nav-dashboard" class="w-full flex items-center gap-4 p-4 rounded-xl active-nav text-left transition-all">
+                    <i class="fas fa-th-large w-5"></i> <span class="text-sm font-semibold">Dashboard</span>
+                </button>
+                <button onclick="switchTab('reservasi')" id="nav-reservasi" class="w-full flex items-center gap-4 p-4 rounded-xl text-left text-slate-400 hover:text-white transition-all">
+                    <i class="fas fa-calendar-check w-5"></i> <span class="text-sm font-semibold">Reservasi</span>
+                </button>
+                <button onclick="switchTab('inventory')" id="nav-inventory" class="w-full flex items-center gap-4 p-4 rounded-xl text-left text-slate-400 hover:text-white transition-all">
+                    <i class="fas fa-box w-5"></i> <span class="text-sm font-semibold">Inventaris</span>
+                </button>
+                <button onclick="switchTab('history')" id="nav-history" class="w-full flex items-center gap-4 p-4 rounded-xl text-left text-slate-400 hover:text-white transition-all">
+                    <i class="fas fa-receipt w-5"></i> <span class="text-sm font-semibold">Riwayat</span>
+                </button>
+
+                <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest ml-4 mt-8 mb-2">Admin Panel</p>
+                <div id="adminLockSection">
+                    <button onclick="openPinModal('general')" class="w-full flex items-center gap-4 p-4 rounded-xl text-left text-slate-400 hover:text-white transition-all">
+                        <i class="fas fa-lock w-5 text-brand-accent"></i> <span class="text-sm font-semibold">Unlock Admin</span>
+                    </button>
+                </div>
+
+                <div id="adminMenus" class="hidden space-y-1">
+                    <button onclick="switchTab('admin-log')" id="nav-admin-log" class="w-full flex items-center gap-4 p-4 rounded-xl text-left text-slate-400 hover:text-white transition-all">
+                        <i class="fas fa-shield-alt w-5"></i> <span class="text-sm font-semibold">Audit Log</span>
+                    </button>
+                    <button onclick="switchTab('rates')" id="nav-rates" class="w-full flex items-center gap-4 p-4 rounded-xl text-left text-slate-400 hover:text-white transition-all">
+                        <i class="fas fa-tags w-5"></i> <span class="text-sm font-semibold">Set Tarif</span>
+                    </button>
+                    <button onclick="lockAdmin()" class="w-full flex items-center gap-4 p-4 text-red-400 rounded-xl text-left mt-4 hover:bg-red-500/10">
+                        <i class="fas fa-power-off w-5"></i> <span class="text-sm font-semibold">Kunci Admin</span>
+                    </button>
+                </div>
+            </nav>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="flex-1 p-6 md:p-12 overflow-y-auto h-screen bg-slate-50">
+            <!-- Dashboard Section -->
+            <div id="section-dashboard" class="tab-content">
+                <div class="flex justify-between items-start mb-12">
+                    <div>
+                        <h2 class="text-4xl font-black text-brand-dark tracking-tight">Status Unit</h2>
+                        <p class="text-slate-500 font-medium mt-1" id="currentDate">--</p>
+                    </div>
+                    <div class="bg-white px-8 py-5 rounded-3xl shadow-sm border border-slate-200 text-right">
+                        <span class="text-[10px] text-slate-400 font-black uppercase block tracking-widest mb-1">Omset Hari Ini (PS + FnB)</span>
+                        <div class="text-2xl font-black text-brand-dark" id="totalDailyRevenue">Rp 0</div>
+                    </div>
+                </div>
+                <div id="unitsGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8"></div>
+            </div>
+
+            <!-- Reservasi Section -->
+            <div id="section-reservasi" class="tab-content hidden">
+                <div class="flex justify-between items-center mb-8">
+                    <h2 class="text-3xl font-black text-brand-dark">Manajemen Reservasi</h2>
+                    <button onclick="openReservationModal()" class="bg-brand-accent text-brand-dark px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider shadow-lg hover:scale-105 transition-transform">
+                        Tambah Reservasi
+                    </button>
+                </div>
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div class="lg:col-span-2">
+                        <div class="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 overflow-hidden">
+                            <table class="w-full text-left text-xs">
+                                <thead class="bg-slate-50 border-b">
+                                    <tr>
+                                        <th class="p-6 text-[10px] font-black uppercase text-slate-400">Jam</th>
+                                        <th class="p-6 text-[10px] font-black uppercase text-slate-400">Pelanggan</th>
+                                        <th class="p-6 text-[10px] font-black uppercase text-slate-400">Unit / Ket</th>
+                                        <th class="p-6 text-[10px] font-black uppercase text-slate-400 text-center">Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="reservationTable" class="divide-y divide-slate-50"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="bg-brand-dark p-8 rounded-[2.5rem] text-white h-fit">
+                        <h4 class="text-brand-accent font-black text-xl mb-2">Info Antrean</h4>
+                        <p class="text-slate-400 text-xs leading-relaxed">Daftar reservasi hari ini.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Inventory Section -->
+            <div id="section-inventory" class="tab-content hidden">
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+                    <div>
+                        <h2 class="text-3xl font-black text-brand-dark">Inventaris & Kantin</h2>
+                        <p class="text-slate-500 text-xs mt-1 font-medium">Klik "Jual" untuk mencatat transaksi langsung ke profit.</p>
+                    </div>
+                    <button onclick="openInventoryModal()" class="bg-brand-dark text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider hover:bg-slate-800 transition-all">
+                        Tambah Barang Baru
+                    </button>
+                </div>
+                
+                <div class="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 overflow-hidden">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-50 border-b">
+                            <tr>
+                                <th class="p-6 text-[10px] font-black uppercase text-slate-400">Nama Barang</th>
+                                <th class="p-6 text-[10px] font-black uppercase text-slate-400">Harga Jual</th>
+                                <th class="p-6 text-[10px] font-black uppercase text-slate-400">Stok</th>
+                                <th class="p-6 text-[10px] font-black uppercase text-slate-400 text-center">Aksi Cepat</th>
+                                <th class="p-6 text-[10px] font-black uppercase text-slate-400 text-right">Kelola</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inventoryTable" class="divide-y divide-slate-50"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Riwayat Section -->
+            <div id="section-history" class="tab-content hidden">
+                <div class="flex justify-between items-center mb-8">
+                    <h2 class="text-3xl font-black text-brand-dark">Riwayat Transaksi</h2>
+                    <!-- Fitur hapus riwayat di sini telah dihapus sesuai permintaan agar hanya admin yang bisa mengelola data -->
+                </div>
+                <div class="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 overflow-hidden">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-50 border-b">
+                            <tr>
+                                <th class="p-6 text-[10px] font-black uppercase text-slate-400">Waktu</th>
+                                <th class="p-6 text-[10px] font-black uppercase text-slate-400">Unit / Item</th>
+                                <th class="p-6 text-[10px] font-black uppercase text-slate-400">Keterangan</th>
+                                <th class="p-6 text-[10px] font-black uppercase text-slate-400 text-right">Total Tagihan</th>
+                                <th class="p-6 text-[10px] font-black uppercase text-slate-400 text-center">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyTable" class="divide-y divide-slate-50"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Admin Log Section -->
+            <div id="section-admin-log" class="tab-content hidden">
+                <div class="flex justify-between items-center mb-8">
+                    <h2 class="text-3xl font-black text-brand-dark">Audit Log</h2>
+                    <div class="flex gap-4">
+                        <!-- Perbaikan: Tombol Wipe Logs dan Clear History disatukan di sini agar data benar-benar bersih -->
+                        <button onclick="clearAllData()" class="bg-red-500 hover:bg-red-600 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg transition-all">
+                           Hapus Semua Data (Wipe)
+                        </button>
+                    </div>
+                </div>
+                <div class="bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden shadow-sm">
+                    <table class="w-full text-left">
+                        <thead class="bg-brand-dark text-white">
+                            <tr>
+                                <th class="p-6 text-[10px] uppercase font-bold">Waktu</th>
+                                <th class="p-6 text-[10px] uppercase font-bold">Aktivitas</th>
+                                <th class="p-6 text-[10px] uppercase font-bold text-center">Detail</th>
+                                <th class="p-6 text-[10px] uppercase font-bold text-center">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminLogTable" class="divide-y divide-slate-50 text-xs"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Rates Section -->
+            <div id="section-rates" class="tab-content hidden">
+                <h2 class="text-3xl font-black text-brand-dark mb-8">Tarif Sewa</h2>
+                <div id="ratesGrid" class="grid grid-cols-1 md:grid-cols-3 gap-8"></div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <!-- PIN Modal -->
+    <div id="pinModal" class="hidden fixed inset-0 bg-brand-dark/95 backdrop-blur-xl flex items-center justify-center p-6 z-[100]">
+        <div class="bg-white rounded-[3rem] p-12 w-full max-sm:px-6 w-full max-w-sm text-center">
+            <h3 class="text-2xl font-black text-brand-dark mb-10 uppercase tracking-tight">Admin Pin</h3>
+            <input type="password" maxlength="4" id="pinInput" class="w-full bg-slate-50 rounded-3xl p-6 text-4xl font-black text-center tracking-[1em] outline-none mb-10 border border-slate-200">
+            <div class="grid grid-cols-2 gap-4">
+                <button onclick="closePinModal()" class="py-5 font-bold text-slate-400 text-xs uppercase">Batal</button>
+                <button onclick="checkPin()" class="py-5 font-black bg-brand-dark text-white rounded-3xl text-xs uppercase">Akses</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inventory Modal -->
+    <div id="invModal" class="hidden fixed inset-0 bg-brand-dark/80 backdrop-blur-md flex items-center justify-center p-6 z-50">
+        <div class="bg-white rounded-[3rem] p-12 w-full max-w-md shadow-2xl">
+            <h3 class="text-3xl font-black text-brand-dark mb-8">Barang Baru</h3>
+            <div class="space-y-4">
+                <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                    <label class="text-[9px] font-black text-slate-400 block mb-1 uppercase">Nama Barang</label>
+                    <input type="text" id="invName" class="w-full bg-transparent font-black text-brand-dark outline-none" placeholder="Contoh: Coca Cola">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                        <label class="text-[9px] font-black text-slate-400 block mb-1 uppercase">Harga Jual</label>
+                        <input type="number" id="invPrice" class="w-full bg-transparent font-black text-brand-dark outline-none" placeholder="5000">
+                    </div>
+                    <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                        <label class="text-[9px] font-black text-slate-400 block mb-1 uppercase">Stok Awal</label>
+                        <input type="number" id="invStock" class="w-full bg-transparent font-black text-brand-dark outline-none" placeholder="10">
+                    </div>
+                </div>
+                <button onclick="saveInventory()" class="w-full py-5 bg-brand-dark text-white font-black rounded-2xl shadow-lg uppercase tracking-widest mt-4">TAMBAH BARANG</button>
+                <button onclick="closeInventoryModal()" class="w-full text-slate-400 font-bold text-xs uppercase mt-2">Batal</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reservasi Modal -->
+    <div id="resModal" class="hidden fixed inset-0 bg-brand-dark/80 backdrop-blur-md flex items-center justify-center p-6 z-50">
+        <div class="bg-white rounded-[3rem] p-12 w-full max-w-md shadow-2xl">
+            <h3 class="text-3xl font-black text-brand-dark mb-8">Reservasi Baru</h3>
+            <div class="space-y-4">
+                <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                    <label class="text-[9px] font-black text-slate-400 block mb-1 uppercase">Nama Pelanggan</label>
+                    <input type="text" id="resName" class="w-full bg-transparent font-black text-brand-dark outline-none" placeholder="Contoh: Budi">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                        <label class="text-[9px] font-black text-slate-400 block mb-1 uppercase">Waktu</label>
+                        <input type="time" id="resTime" class="w-full bg-transparent font-black text-brand-dark outline-none">
+                    </div>
+                    <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                        <label class="text-[9px] font-black text-slate-400 block mb-1 uppercase">Unit</label>
+                        <input type="text" id="resUnit" class="w-full bg-transparent font-black text-brand-dark outline-none" placeholder="PS3-1">
+                    </div>
+                </div>
+                <button onclick="saveReservation()" class="w-full py-5 bg-brand-dark text-white font-black rounded-2xl uppercase mt-4">SIMPAN</button>
+                <button onclick="closeReservationModal()" class="w-full text-slate-400 font-bold text-xs uppercase mt-2">Batal</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Play & Finish Modals -->
+    <div id="payModal" class="hidden fixed inset-0 bg-brand-dark/80 backdrop-blur-md flex items-center justify-center p-6 z-50">
+        <div class="bg-white rounded-[3rem] p-12 w-full max-w-md shadow-2xl text-center">
+            <h3 id="payTitle" class="text-3xl font-black text-brand-dark mb-8">Mulai Sewa</h3>
+            <div class="space-y-4 text-left">
+                <div class="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                    <label class="text-[9px] font-black text-slate-400 block mb-2 uppercase">Billing Mode</label>
+                    <select id="billingMode" class="w-full bg-transparent font-black text-brand-dark outline-none" onchange="toggleBillingMode()">
+                        <option value="timed">DURASI TETAP</option>
+                        <option value="open">OPEN BILLING</option>
+                    </select>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                        <label class="text-[9px] font-black text-slate-400 block mb-2 uppercase">Mulai</label>
+                        <input type="time" id="startTimeInput" class="bg-transparent font-black text-brand-dark outline-none w-full" oninput="calcPrice()">
+                    </div>
+                    <div id="durInputContainer" class="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                        <label class="text-[9px] font-black text-slate-400 block mb-2 uppercase">Durasi (Jam)</label>
+                        <input type="number" id="durInput" step="0.5" value="1" min="0.5" class="bg-transparent font-black text-brand-dark outline-none w-full" oninput="calcPrice()">
+                    </div>
+                </div>
+                <div id="priceEstimateBox" class="bg-brand-dark p-6 rounded-2xl text-center">
+                    <p id="costDisplay" class="text-2xl font-black text-brand-accent">Rp 0</p>
+                </div>
+                <button onclick="confirmPay()" class="w-full py-5 bg-brand-accent text-brand-dark font-black rounded-2xl uppercase tracking-widest">AKTIFKAN UNIT</button>
+                <button onclick="closePayModal()" class="w-full text-slate-400 font-bold text-xs uppercase mt-2">Batal</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="finishModal" class="hidden fixed inset-0 bg-brand-dark/80 backdrop-blur-md flex items-center justify-center p-6 z-50">
+        <div class="bg-white rounded-[3rem] p-12 w-full max-w-md shadow-2xl text-center">
+            <h3 id="finishTitle" class="text-3xl font-black text-brand-dark mb-8">Stop Sesi</h3>
+            <div class="space-y-4 text-left">
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                        <label class="text-[9px] font-black text-slate-400 block mb-2 uppercase">Mulai</label>
+                        <input type="time" id="editStartInput" class="bg-transparent font-black text-slate-400 outline-none w-full" readonly>
+                    </div>
+                    <div class="bg-slate-50 p-5 rounded-2xl border-2 border-brand-accent">
+                        <label class="text-[9px] font-black text-brand-dark block mb-2 uppercase">Selesai</label>
+                        <input type="time" id="editEndInput" class="bg-transparent font-black text-brand-dark outline-none w-full" oninput="calcFinishPrice()">
+                    </div>
+                </div>
+                <div class="bg-brand-dark p-6 rounded-2xl text-center">
+                    <p id="finishCostDisplay" class="text-2xl font-black text-brand-accent">Rp 0</p>
+                    <div id="finishDurationLabel" class="text-[9px] text-slate-400 font-bold mt-1 uppercase">0 Jam</div>
+                </div>
+                <button onclick="confirmFinish()" class="w-full py-5 bg-emerald-500 text-white font-black rounded-2xl uppercase tracking-widest">SIMPAN TRANSAKSI</button>
+                <button onclick="closeFinishModal()" class="w-full text-slate-400 font-bold text-xs uppercase mt-2">Batal</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const ADMIN_PIN = "1234";
+        let isAdmin = false;
+        let pendingUnitId = null;
+
+        const units = [
+            { id: 'PS3-1', name: 'PS3 Unit 1', cat: 'PS3 REG' },
+            { id: 'PS3-2', name: 'PS3 Unit 2', cat: 'PS3 REG' },
+            { id: 'PS3-3', name: 'PS3 Unit 3', cat: 'PS3 REG' },
+            { id: 'PS3-4', name: 'PS3 Unit 4', cat: 'PS3 REG' },
+            { id: 'PS3-5', name: 'PS3 Unit 5', cat: 'PS3 REG' },
+            { id: 'PS4-1', name: 'PS4 Unit 1', cat: 'PS4 REG' },
+            { id: 'PS4-2', name: 'PS4 Unit 2', cat: 'PS4 REG' },
+            { id: 'PS4-3', name: 'PS4 Unit 3', cat: 'PS4 REG' },
+            { id: 'PS4-SV1', name: 'PS4 Unit 1', cat: 'PS4 SEMI VIP' },
+            { id: 'PS4-SV2', name: 'PS4 Unit 2', cat: 'PS4 SEMI VIP' },
+            { id: 'PS4-V1', name: 'PS4 Unit 1', cat: 'PS4 VIP' },
+            { id: 'PS5-V1', name: 'PS5 Unit 1', cat: 'PS5 VIP' },
+            { id: 'PS5-V2', name: 'PS5 Unit 2', cat: 'PS5 VIP' },
+            { id: 'NDS-1', name: 'NDS Unit 1', cat: 'NDS VIP' },
+            { id: 'NDS-2', name: 'NDS Unit 2', cat: 'NDS VIP' }
+        ];
+
+        let state = {
+            rates: JSON.parse(localStorage.getItem('sz_rates')) || { 
+                'PS3 REG': 5000, 
+                'PS4 REG': 8000, 
+                'PS4 SEMI VIP': 10000,
+                'PS4 VIP': 12000,
+                'PS5 VIP': 15000,
+                'NDS VIP': 7000 
+            },
+            data: JSON.parse(localStorage.getItem('sz_data')) || [],
+            activeSessions: JSON.parse(localStorage.getItem('sz_sessions')) || {},
+            adminLogs: JSON.parse(localStorage.getItem('sz_admin_logs')) || [],
+            reservations: JSON.parse(localStorage.getItem('sz_reservations')) || [],
+            inventory: JSON.parse(localStorage.getItem('sz_inventory')) || [
+                { id: 1, name: 'Coca Cola 330ml', price: 6000, stock: 24 },
+                { id: 2, name: 'Indomie Goreng', price: 8000, stock: 15 },
+                { id: 3, name: 'Air Mineral 600ml', price: 4000, stock: 40 }
+            ]
+        };
+
+        function init() {
+            updateClock();
+            renderUnits();
+            renderHistory();
+            renderAdminLogs();
+            renderReservations();
+            renderInventory();
+            updateOmset();
+            setInterval(() => {
+                updateClock();
+                updateRealtimeTimers();
+            }, 1000);
+        }
+
+        function updateClock() {
+            const el = document.getElementById('currentDate');
+            if (el) el.innerText = new Date().toLocaleString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        }
+
+        // --- INVENTORY LOGIC ---
+        function renderInventory() {
+            const table = document.getElementById('inventoryTable');
+            if(!table) return;
+            table.innerHTML = '';
+            
+            if(state.inventory.length === 0) {
+                table.innerHTML = `<tr><td colspan="5" class="p-12 text-center text-slate-400 italic">Inventaris kosong</td></tr>`;
+                return;
+            }
+
+            state.inventory.forEach((item, index) => {
+                const lowStock = item.stock <= 5;
+                table.innerHTML += `
+                    <tr class="hover:bg-slate-50 transition-colors">
+                        <td class="p-6 font-black text-brand-dark uppercase">${item.name}</td>
+                        <td class="p-6 font-bold text-slate-600">Rp ${item.price.toLocaleString()}</td>
+                        <td class="p-6">
+                            <div class="flex items-center gap-3">
+                                <span class="px-3 py-1 rounded-full font-black text-sm ${lowStock ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-brand-dark'}">
+                                    ${item.stock} Unit
+                                </span>
+                            </div>
+                        </td>
+                        <td class="p-6 text-center">
+                            <button onclick="sellItem(${index})" 
+                                class="bg-emerald-500 hover:bg-emerald-600 text-white px-5 py-2 rounded-xl font-black text-[10px] uppercase tracking-wider shadow-sm transition-all ${item.stock <= 0 ? 'opacity-30 cursor-not-allowed' : ''}"
+                                ${item.stock <= 0 ? 'disabled' : ''}>
+                                <i class="fas fa-shopping-cart mr-2"></i> Jual
+                            </button>
+                        </td>
+                        <td class="p-6 text-right">
+                            <div class="flex items-center justify-end gap-2">
+                                <button onclick="adjustStock(${index}, 1)" class="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center hover:bg-brand-accent transition-all"><i class="fas fa-plus text-[10px]"></i></button>
+                                <button onclick="adjustStock(${index}, -1)" class="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition-all"><i class="fas fa-minus text-[10px]"></i></button>
+                                <button onclick="deleteInventory(${index})" class="w-8 h-8 rounded-lg bg-red-50 text-red-400 flex items-center justify-center hover:bg-red-500 hover:text-white transition-all ml-2"><i class="fas fa-trash-alt text-[10px]"></i></button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        function sellItem(index) {
+            const item = state.inventory[index];
+            if(item.stock <= 0) return;
+            item.stock -= 1;
+            const trxId = Date.now();
+            state.data.push({
+                id: trxId,
+                uName: 'FnB / KANTIN',
+                amt: item.price,
+                dur: '-',
+                startTime: new Date().toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'}),
+                endTime: '-',
+                status: 'LUNAS',
+                ts: new Date().toISOString(),
+                desc: `Penjualan: ${item.name}`
+            });
+            state.adminLogs.push({
+                ts: new Date().toISOString(),
+                unit: 'PENJUALAN',
+                val: `${item.name} (Rp ${item.price.toLocaleString()})`,
+                status: 'SUKSES'
+            });
+            saveState(); renderInventory(); renderHistory(); renderAdminLogs(); updateOmset();
+        }
+
+        function openInventoryModal() {
+            document.getElementById('invName').value = '';
+            document.getElementById('invPrice').value = '';
+            document.getElementById('invStock').value = '';
+            document.getElementById('invModal').classList.remove('hidden');
+        }
+
+        function closeInventoryModal() { document.getElementById('invModal').classList.add('hidden'); }
+
+        function saveInventory() {
+            const name = document.getElementById('invName').value;
+            const price = parseInt(document.getElementById('invPrice').value);
+            const stock = parseInt(document.getElementById('invStock').value);
+            if(!name || isNaN(price) || isNaN(stock)) return;
+            state.inventory.push({ id: Date.now(), name, price, stock });
+            state.adminLogs.push({ ts: new Date().toISOString(), unit: 'INVENTARIS', val: `${name} (Stok: ${stock})`, status: 'TAMBAH' });
+            saveState(); closeInventoryModal(); renderInventory(); renderAdminLogs();
+        }
+
+        function adjustStock(index, val) {
+            const item = state.inventory[index];
+            item.stock += val;
+            if(item.stock < 0) item.stock = 0;
+            state.adminLogs.push({ ts: new Date().toISOString(), unit: 'STOK', val: `${item.name} (${val > 0 ? '+' : ''}${val})`, status: val > 0 ? 'UPDATE' : 'REDUCE' });
+            saveState(); renderInventory(); renderAdminLogs();
+        }
+
+        function deleteInventory(index) {
+            const item = state.inventory[index];
+            state.adminLogs.push({ ts: new Date().toISOString(), unit: 'INVENTARIS', val: item.name, status: 'DIHAPUS' });
+            state.inventory.splice(index, 1);
+            saveState(); renderInventory(); renderAdminLogs();
+        }
+
+        // --- RESERVATION LOGIC ---
+        function renderReservations() {
+            const table = document.getElementById('reservationTable');
+            if(!table) return;
+            table.innerHTML = '';
+            state.reservations.sort((a,b) => a.time.localeCompare(b.time)).forEach((res, index) => {
+                table.innerHTML += `<tr><td class="p-6 font-black text-brand-dark text-lg">${res.time}</td><td class="p-6 font-bold text-slate-700">${res.name}</td><td class="p-6 font-black text-brand-dark uppercase text-[10px]">${res.unit}</td><td class="p-6 text-center"><button onclick="deleteReservation(${index})" class="text-red-500"><i class="fas fa-trash"></i></button></td></tr>`;
+            });
+        }
+        function openReservationModal() { document.getElementById('resModal').classList.remove('hidden'); }
+        function closeReservationModal() { document.getElementById('resModal').classList.add('hidden'); }
+        function saveReservation() {
+            const name = document.getElementById('resName').value, time = document.getElementById('resTime').value, unit = document.getElementById('resUnit').value;
+            if(!name || !time) return;
+            state.reservations.push({name, time, unit});
+            saveState(); closeReservationModal(); renderReservations();
+        }
+        function deleteReservation(idx) { state.reservations.splice(idx,1); saveState(); renderReservations(); }
+
+        // --- SESSION LOGIC ---
+        function renderUnits() {
+            const grid = document.getElementById('unitsGrid'); if(!grid) return;
+            grid.innerHTML = '';
+            const now = Date.now();
+            units.forEach(u => {
+                const session = state.activeSessions[u.id];
+                const isOpen = session && session.mode === 'open';
+                const isFin = session && session.mode === 'timed' && now >= session.endTs;
+                const isAct = session && (isOpen || (session.mode === 'timed' && now < session.endTs));
+                const card = document.createElement('div');
+                card.className = `p-8 rounded-[2rem] border flex flex-col justify-between h-72 ${isFin ? 'status-finished bg-red-50' : 'bg-white shadow-sm'}`;
+                let html = `<div><span class="text-[11px] font-black uppercase px-0 py-1 bg-slate-100 rounded text-slate-500">${u.cat}</span><h4 class="font-black text-brand-dark text-xl mt-2">${u.name}</h4></div>`;
+                if(isAct) {
+                    html += `<div class="mt-auto"><div id="timer-${u.id}" class="text-3xl font-black text-blue-600 mb-2 tabular-nums">00:00:00</div><button onclick="openFinishModal('${u.id}')" class="w-full py-3 bg-brand-dark text-white text-[9px] font-black rounded-xl uppercase">Stop</button></div>`;
+                } else if(isFin) {
+                    html += `<div class="mt-auto"><div class="text-center mb-2 text-red-600 font-black text-xs">WAKTU HABIS</div><button onclick="clearUnit('${u.id}')" class="w-full py-4 bg-red-600 text-white text-[9px] font-black rounded-xl uppercase">Clear</button></div>`;
+                } else {
+                    html += `<div class="mt-auto"><button onclick="openPay('${u.id}')" class="w-full py-4 bg-brand-dark text-white text-[9px] font-black rounded-xl hover:bg-brand-accent hover:text-brand-dark transition-all uppercase">Play</button></div>`;
+                }
+                card.innerHTML = html; grid.appendChild(card);
+            });
+        }
+
+        function updateRealtimeTimers() {
+            const now = Date.now();
+            Object.keys(state.activeSessions).forEach(uid => {
+                const s = state.activeSessions[uid];
+                const el = document.getElementById(`timer-${uid}`);
+                if(!el) return;
+                const diff = s.mode === 'open' ? (now - s.startTs) : (s.endTs - now);
+                if(diff < 0 && s.mode === 'timed') { renderUnits(); return; }
+                const ms = Math.max(0, diff);
+                const h = Math.floor(ms/3600000), m = Math.floor((ms%3600000)/60000), sec = Math.floor((ms%60000)/1000);
+                el.innerText = `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${sec.toString().padStart(2,'0')}`;
+            });
+        }
+
+        function openPay(id) {
+            pendingUnitId = id; document.getElementById('payModal').classList.remove('hidden');
+            const now = new Date(); document.getElementById('startTimeInput').value = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0');
+            calcPrice();
+        }
+        function closePayModal() { document.getElementById('payModal').classList.add('hidden'); }
+        function toggleBillingMode() {
+            const m = document.getElementById('billingMode').value;
+            document.getElementById('durInputContainer').style.display = m === 'open' ? 'none' : 'block';
+            document.getElementById('priceEstimateBox').style.display = m === 'open' ? 'none' : 'block';
+        }
+        function calcPrice() {
+            const u = units.find(x=>x.id===pendingUnitId), d = parseFloat(document.getElementById('durInput').value)||0;
+            document.getElementById('costDisplay').innerText = `Rp ${Math.round(d * (state.rates[u.cat]||0)).toLocaleString()}`;
+        }
+        function confirmPay() {
+            const u = units.find(x=>x.id===pendingUnitId), m = document.getElementById('billingMode').value;
+            const startStr = document.getElementById('startTimeInput').value, [h, min] = startStr.split(':').map(Number);
+            const startTs = new Date().setHours(h, min, 0, 0);
+            let endTs = m === 'timed' ? startTs + (parseFloat(document.getElementById('durInput').value)*3600000) : 0;
+            state.activeSessions[u.id] = { trxId: Date.now(), mode: m, startTs, endTs, startTime: startStr };
+            state.adminLogs.push({ ts: new Date().toISOString(), unit: u.name, val: m==='open'?'Open':'Timed', status: 'MULAI' });
+            saveState(); closePayModal(); renderUnits(); renderAdminLogs();
+        }
+
+        function openFinishModal(id) {
+            pendingUnitId = id; const s = state.activeSessions[id];
+            document.getElementById('editStartInput').value = s.startTime;
+            const now = new Date(); document.getElementById('editEndInput').value = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0');
+            document.getElementById('finishModal').classList.remove('hidden'); calcFinishPrice();
+        }
+        function closeFinishModal() { document.getElementById('finishModal').classList.add('hidden'); }
+        function calcFinishPrice() {
+            const u = units.find(x=>x.id===pendingUnitId), startS = document.getElementById('editStartInput').value, endS = document.getElementById('editEndInput').value;
+            const [sh, sm] = startS.split(':').map(Number), [eh, em] = endS.split(':').map(Number);
+            let s = new Date(); s.setHours(sh,sm,0,0); let e = new Date(); e.setHours(eh,em,0,0);
+            if(e < s) e.setDate(e.getDate()+1);
+            const hrs = (e-s)/3600000, price = Math.max(0, Math.round(hrs * state.rates[u.cat]));
+            document.getElementById('finishCostDisplay').innerText = `Rp ${price.toLocaleString()}`;
+            document.getElementById('finishDurationLabel').innerText = `${hrs.toFixed(2)} Jam`;
+            return { price, hrs, endS };
+        }
+        function confirmFinish() {
+            const { price, hrs, endS } = calcFinishPrice(); const s = state.activeSessions[pendingUnitId], u = units.find(x=>x.id===pendingUnitId);
+            state.data.push({ id: s.trxId, uName: u.name, amt: price, dur: hrs.toFixed(2), startTime: s.startTime, endTime: endS, status: 'Berhasil', ts: new Date().toISOString(), desc: 'Sewa Console' });
+            state.adminLogs.push({ ts: new Date().toISOString(), unit: u.name, val: `Rp ${price.toLocaleString()}`, status: 'SELESAI' });
+            delete state.activeSessions[pendingUnitId];
+            saveState(); closeFinishModal(); updateOmset(); renderUnits(); renderHistory(); renderAdminLogs();
+        }
+        function clearUnit(id) { delete state.activeSessions[id]; saveState(); renderUnits(); }
+
+        // --- CORE STATE ---
+        function updateOmset() {
+            const t = new Date().toDateString();
+            const total = state.data.filter(x=>new Date(x.ts).toDateString()===t).reduce((s,x)=>s+x.amt,0);
+            document.getElementById('totalDailyRevenue').innerText = `Rp ${total.toLocaleString()}`;
+        }
+        function saveState() {
+            localStorage.setItem('sz_data', JSON.stringify(state.data));
+            localStorage.setItem('sz_sessions', JSON.stringify(state.activeSessions));
+            localStorage.setItem('sz_rates', JSON.stringify(state.rates));
+            localStorage.setItem('sz_admin_logs', JSON.stringify(state.adminLogs));
+            localStorage.setItem('sz_reservations', JSON.stringify(state.reservations));
+            localStorage.setItem('sz_inventory', JSON.stringify(state.inventory));
+        }
+
+        // --- ADMIN FUNCTIONS ---
+        function renderAdminLogs() {
+            const t = document.getElementById('adminLogTable'); if(!t) return;
+            t.innerHTML = [...state.adminLogs].reverse().map(l => `<tr><td class="p-6">${new Date(l.ts).toLocaleTimeString()}</td><td class="p-6 font-black">${l.unit}</td><td class="p-6 text-center">${l.val}</td><td class="p-6 text-center font-black">${l.status}</td></tr>`).join('');
+        }
+        function renderHistory() {
+            const t = document.getElementById('historyTable'); if(!t) return;
+            t.innerHTML = [...state.data].reverse().map(x => `<tr class="${x.uName === 'FnB / KANTIN' ? 'bg-emerald-50/30' : ''}"><td class="p-6">${new Date(x.ts).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'})}</td><td class="p-6 font-black ${x.uName === 'FnB / KANTIN' ? 'text-emerald-600' : 'text-brand-dark'}">${x.uName}</td><td class="p-6 italic text-slate-500">${x.desc || '-'}</td><td class="p-6 text-right font-black">Rp ${x.amt.toLocaleString()}</td><td class="p-6 text-center font-bold text-[10px] text-emerald-500 uppercase tracking-tighter">LUNAS</td></tr>`).join('');
+        }
+        
+        // PERBAIKAN: Fungsi Wipe Logs agar benar-benar berfungsi dan membersihkan state
+        function clearAllData() {
+            if (confirm("PERINGATAN: Ini akan menghapus seluruh RIWAYAT TRANSAKSI dan AUDIT LOG selamanya. Lanjutkan?")) {
+                state.data = [];
+                state.adminLogs = [];
+                saveState();
+                
+                // Refresh tampilan setelah dihapus
+                renderHistory();
+                renderAdminLogs();
+                updateOmset();
+                
+                // Tambahkan satu log baru sebagai penanda pembersihan
+                state.adminLogs.push({
+                    ts: new Date().toISOString(),
+                    unit: 'SISTEM',
+                    val: 'DATABASE WIPED',
+                    status: 'CLEAN'
+                });
+                saveState();
+                renderAdminLogs();
+            }
+        }
+
+        function switchTab(id) {
+            document.querySelectorAll('.tab-content').forEach(x=>x.classList.add('hidden'));
+            document.getElementById(`section-${id}`).classList.remove('hidden');
+            document.querySelectorAll('#mainNav button').forEach(b=>b.classList.remove('active-nav'));
+            if(document.getElementById(`nav-${id}`)) document.getElementById(`nav-${id}`).classList.add('active-nav');
+            if(id==='inventory') renderInventory();
+            if(id==='rates') renderRates();
+            if(id==='admin-log') renderAdminLogs();
+        }
+        function renderRates() {
+            const g = document.getElementById('ratesGrid'); if(!g) return;
+            g.innerHTML = Object.keys(state.rates).map(c => `<div class="bg-white p-6 rounded-2xl border"><label class="text-[10px] font-black text-slate-400 uppercase">${c}</label><input type="number" value="${state.rates[c]}" onchange="state.rates['${c}']=parseInt(this.value);saveState();" class="w-full bg-slate-50 p-4 rounded-xl font-black mt-2"></div>`).join('');
+        }
+        function openPinModal() { document.getElementById('pinInput').value=''; document.getElementById('pinModal').classList.remove('hidden'); }
+        function closePinModal() { document.getElementById('pinModal').classList.add('hidden'); }
+        function checkPin() { if(document.getElementById('pinInput').value === ADMIN_PIN) { isAdmin=true; document.getElementById('adminLockSection').classList.add('hidden'); document.getElementById('adminMenus').classList.remove('hidden'); closePinModal(); } }
+        function lockAdmin() { isAdmin=false; document.getElementById('adminLockSection').classList.remove('hidden'); document.getElementById('adminMenus').classList.add('hidden'); switchTab('dashboard'); }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
