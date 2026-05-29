@@ -1409,10 +1409,29 @@
 
     // --- FINANCIAL SUMMARY & REPORTS VIEW ---
     function DashboardAnalytics({ transactions, inventory, onDeleteTransaction }) {
-      const today = new Date();
-      today.setHours(0,0,0,0);
-      
-      const todaysTrx = transactions.filter(t => t.timestamp >= today.getTime());
+      // Calculate the start of the financial day (06:00 AM Jakarta Time Zone WIB / UTC+7)
+      const getJakartaFinancialDayStart = () => {
+        const wibOffset = 7 * 60 * 60 * 1000; // 7 hours in ms
+        const absoluteWibMs = Date.now() + wibOffset;
+        const wibDate = new Date(absoluteWibMs);
+        
+        const wibYear = wibDate.getUTCFullYear();
+        const wibMonth = wibDate.getUTCMonth();
+        const wibDay = wibDate.getUTCDate();
+        const wibHours = wibDate.getUTCHours();
+        
+        let financialWibDay = wibDay;
+        // If before 06:00 AM WIB, it belongs to the previous business day
+        if (wibHours < 6) {
+          financialWibDay -= 1;
+        }
+        
+        const financialDayStartWibMs = Date.UTC(wibYear, wibMonth, financialWibDay, 6, 0, 0, 0);
+        return financialDayStartWibMs - wibOffset; // Return standard Unix Timestamp
+      };
+
+      const financialDayStart = getJakartaFinancialDayStart();
+      const todaysTrx = transactions.filter(t => t.timestamp >= financialDayStart);
       
       const totalRevenue = todaysTrx.reduce((sum, t) => sum + t.grandTotal, 0);
       const rentalRevenue = todaysTrx.reduce((sum, t) => sum + (t.rentalTotal || 0), 0);
@@ -1446,12 +1465,24 @@
         unitProfit[t.unit_id].total += t.grandTotal;
       });
 
+      // Format Active Cycle display period in WIB (UTC+7)
+      const cycleStartWib = new Date(financialDayStart + 7 * 60 * 60 * 1000);
+      const cycleEndWib = new Date(financialDayStart + 24 * 60 * 60 * 1000 + 7 * 60 * 60 * 1000);
+      
+      const formatDateWib = (date) => {
+        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        return `${days[date.getUTCDay()]}, ${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()} - ${date.getUTCHours().toString().padStart(2, '0')}:${date.getUTCMinutes().toString().padStart(2, '0')} WIB`;
+      };
+
       return (
         <div className="space-y-6 animate-in">
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-2xl font-bold text-white">Daily Summary Analytics</h2>
-              <p className="text-slate-400 text-sm">Real-time financial breakdown (Revenue & Net Profit).</p>
+              <p className="text-slate-400 text-sm mt-0.5">
+                Active Cycle: <span className="text-yellow-400 font-semibold">{formatDateWib(cycleStartWib)}</span> to <span className="text-yellow-400 font-semibold">{formatDateWib(cycleEndWib)}</span>
+              </p>
             </div>
           </div>
 
