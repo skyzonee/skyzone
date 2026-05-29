@@ -157,11 +157,27 @@
           startTime,
           endTime,
           prePaidAmount,
-          fnbOrders: []
+          fnbOrders: [],
+          note: '' // Initial empty note
         };
 
         setUnits(units.map(u => u.id === unitId ? { ...u, status: 'active', activeSession: session } : u));
         setSessionModalUnit(null);
+      };
+
+      const handleUpdateSessionNote = (unitId, noteText) => {
+        setUnits(prevUnits => prevUnits.map(u => {
+          if (u.id === unitId && u.activeSession) {
+            return {
+              ...u,
+              activeSession: {
+                ...u.activeSession,
+                note: noteText
+              }
+            };
+          }
+          return u;
+        }));
       };
 
       const handleAddFnB = (unitId, items) => {
@@ -188,7 +204,8 @@
             grandTotal: fnbTotal,
             paymentMethod: 'Cash', 
             timestamp: Date.now(),
-            items: items
+            items: items,
+            note: ''
           };
           setTransactions([newTransaction, ...transactions]);
           setWalkInModal(false);
@@ -222,7 +239,8 @@
           grandTotal: item.price,
           paymentMethod: 'Cash',
           timestamp: Date.now(),
-          items: [{ item, qty: 1 }]
+          items: [{ item, qty: 1 }],
+          note: ''
         };
         setTransactions([newTransaction, ...transactions]);
       };
@@ -274,7 +292,8 @@
           grandTotal,
           paymentMethod,
           timestamp: Date.now(),
-          fnbOrders: session.fnbOrders
+          fnbOrders: session.fnbOrders,
+          note: session.note || '' // Persist note to financial transaction log
         };
 
         setTransactions([newTransaction, ...transactions]);
@@ -477,7 +496,7 @@
                     }
 
                     return (
-                      <div key={unit.id} className={`rounded-2xl border transition-all duration-300 overflow-hidden ${
+                      <div key={unit.id} className={`rounded-2xl border transition-all duration-300 overflow-hidden flex flex-col ${
                         isActive 
                           ? 'bg-slate-800 border-yellow-400/50 shadow-[0_0_15px_rgba(250,204,21,0.1)]' 
                           : 'bg-slate-900 border-slate-800 hover:border-slate-700'
@@ -498,7 +517,7 @@
                         </div>
 
                         {/* Card Body */}
-                        <div className="p-4">
+                        <div className="p-4 flex-1 flex flex-col justify-between">
                           {isActive ? (
                             <div className="space-y-4">
                               <div className="flex justify-between items-end">
@@ -516,6 +535,12 @@
                                   <p className="text-lg font-bold text-yellow-400">{formatCurrency(currentEstCost)}</p>
                                 </div>
                               </div>
+
+                              {/* Interactive Session Note Area */}
+                              <SessionNoteManager 
+                                unit={unit} 
+                                onUpdateNote={handleUpdateSessionNote} 
+                              />
                               
                               <div className="flex gap-2">
                                 <button 
@@ -797,6 +822,94 @@
 
     // --- SUB-COMPONENTS & MODALS (Newly Implemented) ---
 
+    // Inline Session Note Manager for Active Consoles
+    function SessionNoteManager({ unit, onUpdateNote }) {
+      const [isEditing, setIsEditing] = useState(false);
+      const [tempNote, setTempNote] = useState(unit.activeSession?.note || '');
+
+      const handleSave = () => {
+        onUpdateNote(unit.id, tempNote.trim());
+        setIsEditing(false);
+      };
+
+      if (isEditing) {
+        return (
+          <div className="flex items-center space-x-1.5 py-1 mb-2">
+            <input
+              type="text"
+              value={tempNote}
+              onChange={(e) => setTempNote(e.target.value)}
+              placeholder="e.g. Unpaid, needs bill audit"
+              className="flex-1 bg-slate-950 text-xs border border-slate-700 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-yellow-400"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSave();
+                if (e.key === 'Escape') setIsEditing(false);
+              }}
+            />
+            <button 
+              onClick={handleSave} 
+              className="p-1.5 bg-green-500 hover:bg-green-600 rounded-lg text-slate-950 transition-colors"
+              title="Save Note"
+            >
+              <Check size={12} />
+            </button>
+            <button 
+              onClick={() => setIsEditing(false)} 
+              className="p-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
+              title="Cancel"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        );
+      }
+
+      const currentNote = unit.activeSession?.note || '';
+      // Regex check for payment, billing, or unpaid alert keywords to trigger danger highlight color styling automatically
+      const isCritical = /unpaid|debt|pay|paid|billing|bayar|belum|tempo|bon|hutang/i.test(currentNote);
+
+      return (
+        <div className="py-1 mb-2 border-t border-slate-800/50 mt-1">
+          {currentNote ? (
+            <div className={`flex items-center justify-between text-xs p-2 rounded-lg border transition ${
+              isCritical 
+                ? 'bg-red-500/10 border-red-500/30 text-red-300' 
+                : 'bg-slate-950/80 border-slate-800 text-slate-300'
+            }`}>
+              <span className="truncate flex-1" title={currentNote}>
+                <span className="font-semibold text-[10px] uppercase tracking-wider opacity-60 block">Session Note</span>
+                {currentNote}
+              </span>
+              <div className="flex space-x-1 ml-2">
+                <button 
+                  onClick={() => { setTempNote(currentNote); setIsEditing(true); }}
+                  className="p-1 text-slate-400 hover:text-white rounded transition"
+                  title="Edit Note"
+                >
+                  <Edit2 size={11} />
+                </button>
+                <button 
+                  onClick={() => onUpdateNote(unit.id, '')}
+                  className="p-1 text-slate-400 hover:text-red-400 rounded transition"
+                  title="Delete Note"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button 
+              onClick={() => setIsEditing(true)}
+              className="text-[11px] text-slate-500 hover:text-yellow-400 flex items-center transition"
+            >
+              <Plus size={10} className="mr-1" /> Add session note...
+            </button>
+          )}
+        </div>
+      );
+    }
+
     function StartSessionForm({ unit, onStart, tierInfo }) {
       const [type, setType] = useState('pay-as-you-go');
       const [hours, setHours] = useState(1);
@@ -982,15 +1095,60 @@
               <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20} /></button>
             </div>
             
-            <div className="p-6 space-y-6">
+            <div className="p-6 space-y-4">
+              {/* Optional Active Session Note Alert inside Checkout */}
+              {session.note && (
+                <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 p-3.5 rounded-xl text-xs">
+                  <span className="font-bold uppercase text-[10px] block opacity-60 mb-0.5">Active Alert / Note</span>
+                  {session.note}
+                </div>
+              )}
+
+              {/* F&B Ordered Items List Detail */}
+              <div className="space-y-2">
+                <span className="font-bold uppercase text-[10px] tracking-wider text-slate-400 block">Ordered Items Detailed list</span>
+                <div className="bg-slate-950/80 border border-slate-800 rounded-xl divide-y divide-slate-850/50 max-h-[140px] overflow-y-auto">
+                  
+                  {/* Base Rental Component display inside the order summary */}
+                  <div className="p-3 flex justify-between items-center text-sm text-slate-300">
+                    <div>
+                      <span className="font-medium text-white">Console Time ({tierInfo.name})</span>
+                      <span className="text-[11px] block text-slate-500">
+                        {session.type === 'prepaid' ? 'Prepaid Fixed Slot' : 'Pay As You Go'}
+                      </span>
+                    </div>
+                    <span className="text-slate-400">{formatCurrency(rentalTotal)}</span>
+                  </div>
+
+                  {/* Dynamic orders mapping */}
+                  {session.fnbOrders.map((order, index) => (
+                    <div key={index} className="p-3 flex justify-between items-center text-sm">
+                      <div>
+                        <span className="font-medium text-white">{order.item.name}</span>
+                        <span className="text-[11px] block text-slate-500">
+                          {formatCurrency(order.item.price)} x {order.qty}
+                        </span>
+                      </div>
+                      <span className="text-slate-400 font-mono">
+                        {formatCurrency(order.item.price * order.qty)}
+                      </span>
+                    </div>
+                  ))}
+
+                  {session.fnbOrders.length === 0 && (
+                    <div className="p-3 text-center text-xs text-slate-600 italic">No extra food or drinks ordered.</div>
+                  )}
+                </div>
+              </div>
+
               <div className="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
                 <div className="flex justify-between text-slate-400 text-sm">
-                  <span>Console Rental ({tierInfo.name}):</span> 
+                  <span>Console Rental:</span> 
                   <span className="text-white font-medium">{formatCurrency(rentalTotal)}</span>
                 </div>
                 {session.fnbOrders.length > 0 && (
                   <div className="flex justify-between text-slate-400 text-sm">
-                    <span>F&B Total ({session.fnbOrders.reduce((a,b)=>a+b.qty,0)} items):</span> 
+                    <span>F&B Total:</span> 
                     <span className="text-white font-medium">{formatCurrency(fnbTotal)}</span>
                   </div>
                 )}
@@ -1081,8 +1239,7 @@
       )
     }
 
-    // --- EXISTING SUB-COMPONENTS (From original code) ---
-
+    // --- SYSTEM SETTINGS VIEW ---
     function SystemSettings({ tiers, onUpdateTier, units, onUpdateUnitName }) {
       const [editingTier, setEditingTier] = useState(null);
       const [editValue, setEditValue] = useState('');
@@ -1250,6 +1407,7 @@
       );
     }
 
+    // --- FINANCIAL SUMMARY & REPORTS VIEW ---
     function DashboardAnalytics({ transactions, inventory, onDeleteTransaction }) {
       const today = new Date();
       today.setHours(0,0,0,0);
@@ -1299,7 +1457,7 @@
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             
-            <div className="bg-gradient-to-br from-green-400 to-green-600 p-6 rounded-2xl text-slate-900 shadow-lg shadow-green-500/20 md:col-span-2">
+            <div className="bg-gradient-to-br from-green-400 to-green-600 p-6 rounded-2xl text-slate-950 shadow-lg shadow-green-500/20 md:col-span-2">
               <div className="flex justify-between items-start">
                  <div>
                    <div className="text-sm font-bold uppercase mb-1 opacity-80">Total Net Profit Today</div>
@@ -1387,32 +1545,42 @@
               </div>
               <div className="overflow-y-auto p-4 space-y-3 flex-1">
                 {todaysTrx.slice(0, 10).map((trx, i) => (
-                  <div key={i} className="bg-slate-950 p-4 rounded-lg border border-slate-800 flex justify-between items-center hover:border-slate-600 transition">
-                    <div>
-                      <div className="font-semibold text-white mb-1">
-                        {trx.type === 'walk-in' ? 'Walk-in FnB Sale' : `Session - ${trx.unit_name}`}
+                  <div key={i} className="bg-slate-950 p-4 rounded-lg border border-slate-800 flex flex-col justify-between hover:border-slate-600 transition p-4">
+                    <div className="flex justify-between items-start w-full">
+                      <div>
+                        <div className="font-semibold text-white mb-1">
+                          {trx.type === 'walk-in' ? 'Walk-in FnB Sale' : `Session - ${trx.unit_name}`}
+                        </div>
+                        <div className="text-xs text-slate-400 flex items-center">
+                          <Clock size={12} className="mr-1" />
+                          {new Date(trx.timestamp).toLocaleTimeString('id-ID')} 
+                          <span className="mx-2">•</span> 
+                          {trx.paymentMethod === 'QRIS' ? <CreditCard size={12} className="mr-1 text-purple-400"/> : <Banknote size={12} className="mr-1 text-yellow-400"/>}
+                          {trx.paymentMethod}
+                        </div>
                       </div>
-                      <div className="text-xs text-slate-400 flex items-center">
-                        <Clock size={12} className="mr-1" />
-                        {new Date(trx.timestamp).toLocaleTimeString('id-ID')} 
-                        <span className="mx-2">•</span> 
-                        {trx.paymentMethod === 'QRIS' ? <CreditCard size={12} className="mr-1 text-purple-400"/> : <Banknote size={12} className="mr-1 text-yellow-400"/>}
-                        {trx.paymentMethod}
+                      <div className="flex items-center space-x-3">
+                        <div className="text-right">
+                          <div className="font-bold text-yellow-400">{formatCurrency(trx.grandTotal)}</div>
+                          {trx.type === 'walk-in' && <div className="text-[10px] text-green-400">Profit: +{formatCurrency((trx.fnbTotal || 0) - (trx.fnbCostTotal || 0))}</div>}
+                        </div>
+                        <button 
+                          onClick={() => onDeleteTransaction(trx.id)}
+                          className="p-2 bg-slate-900/50 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-lg transition border border-slate-800 hover:border-red-500/30"
+                          title="Delete Transaction (Restores F&B Stock)"
+                        >
+                          <Trash2 size={16} />
+                        </button>
                       </div>
                     </div>
-                    <div className="flex items-center space-x-3">
-                      <div className="text-right">
-                        <div className="font-bold text-yellow-400">{formatCurrency(trx.grandTotal)}</div>
-                        {trx.type === 'walk-in' && <div className="text-[10px] text-green-400">Profit: +{formatCurrency((trx.fnbTotal || 0) - (trx.fnbCostTotal || 0))}</div>}
+
+                    {/* Display saved note from Checkout in financial records */}
+                    {trx.note && (
+                      <div className="mt-2.5 text-xs bg-red-500/10 border border-red-500/25 text-red-300 px-2.5 py-1.5 rounded-lg flex items-center">
+                        <AlertTriangle size={12} className="mr-1.5 shrink-0 opacity-80" />
+                        <span className="truncate"><strong>Checkout Note:</strong> {trx.note}</span>
                       </div>
-                      <button 
-                        onClick={() => onDeleteTransaction(trx.id)}
-                        className="p-2 bg-slate-900/50 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-lg transition border border-slate-800 hover:border-red-500/30"
-                        title="Delete Transaction (Restores F&B Stock)"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
+                    )}
                   </div>
                 ))}
                 {todaysTrx.length === 0 && (
