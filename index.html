@@ -1,0 +1,1469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Skyzone Hub</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Babel Standalone for compiling JSX in the browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    /* Custom Scrollbar for better UI */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0B1120;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #334155;
+    }
+    
+    /* Animation Utilities */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-in {
+      animation: fadeIn 0.3s ease-out forwards;
+    }
+  </style>
+</head>
+<body class="bg-[#0B1120] text-slate-200 font-sans selection:bg-yellow-400/30">
+  <div id="root"></div>
+
+  <!-- Main React Application -->
+  <script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useMemo } from 'https://esm.sh/react@18.2.0';
+    import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
+    import { 
+      Monitor, Coffee, BarChart3, Settings, Play, Square, ShoppingCart, 
+      Plus, Minus, AlertTriangle, Clock, LogOut, UserCircle, CreditCard, 
+      Banknote, Check, X, Edit2, Save, Zap, Ban, Trash2
+    } from 'https://esm.sh/lucide-react@0.292.0';
+
+    // --- INITIAL DATA SEEDING ---
+    const INITIAL_TIERS = {
+      ps3_reg: { id: 'ps3_reg', name: 'PS3 Regular', rate: 5000 },
+      ps4_reg: { id: 'ps4_reg', name: 'PS4 Regular', rate: 10000 },
+      ps4_semi: { id: 'ps4_semi', name: 'PS4 Semi-VIP', rate: 15000 },
+      ps4_vip: { id: 'ps4_vip', name: 'PS4 VIP', rate: 20000 },
+      ps5_vip: { id: 'ps5_vip', name: 'PS5 VIP', rate: 30000 },
+    };
+
+    const INITIAL_UNITS = [
+      ...Array(5).fill(0).map((_, i) => ({ id: `ps3_r_${i+1}`, name: `PS3 Reg 0${i+1}`, tier: 'ps3_reg', status: 'idle', activeSession: null })),
+      ...Array(3).fill(0).map((_, i) => ({ id: `ps4_r_${i+1}`, name: `PS4 Reg 0${i+1}`, tier: 'ps4_reg', status: 'idle', activeSession: null })),
+      ...Array(2).fill(0).map((_, i) => ({ id: `ps4_sv_${i+1}`, name: `PS4 Semi-VIP 0${i+1}`, tier: 'ps4_semi', status: 'idle', activeSession: null })),
+      { id: 'ps4_v_1', name: 'PS4 VIP 01', tier: 'ps4_vip', status: 'idle', activeSession: null },
+      ...Array(2).fill(0).map((_, i) => ({ id: `ps5_v_${i+1}`, name: `PS5 VIP 0${i+1}`, tier: 'ps5_vip', status: 'idle', activeSession: null })),
+    ];
+
+    const INITIAL_INVENTORY = [
+      { id: 'fnb_1', name: 'Indomie Goreng Telur', sku: 'FOOD01', category: 'Food', cost: 4000, price: 10000, stock: 25, alert: 5 },
+      { id: 'fnb_2', name: 'Coca Cola 330ml', sku: 'BEV01', category: 'Drink', cost: 4500, price: 8000, stock: 4, alert: 5 },
+      { id: 'fnb_3', name: 'French Fries', sku: 'FOOD02', category: 'Food', cost: 6000, price: 15000, stock: 15, alert: 5 },
+      { id: 'fnb_4', name: 'Iced Tea', sku: 'BEV02', category: 'Drink', cost: 2000, price: 5000, stock: 50, alert: 10 },
+    ];
+
+    // --- UTILITY FUNCTIONS ---
+    const formatCurrency = (amount) => {
+      return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(amount);
+    };
+
+    const formatTime = (ms) => {
+      const totalSeconds = Math.floor(Math.max(0, ms) / 1000);
+      const h = Math.floor(totalSeconds / 3600);
+      const m = Math.floor((totalSeconds % 3600) / 60);
+      const s = totalSeconds % 60;
+      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    };
+
+    // --- MAIN APPLICATION COMPONENT ---
+    function SkyzoneHub() {
+      // --- STATE MANAGEMENT ---
+      const [role, setRole] = useState('admin'); // 'admin' | 'staff'
+      const [activeTab, setActiveTab] = useState('monitoring');
+      const [now, setNow] = useState(Date.now());
+      
+      const [tiers, setTiers] = useState(() => {
+        const saved = localStorage.getItem('skyzone_tiers');
+        return saved ? JSON.parse(saved) : INITIAL_TIERS;
+      });
+
+      const [units, setUnits] = useState(() => {
+        const saved = localStorage.getItem('skyzone_units');
+        return saved ? JSON.parse(saved) : INITIAL_UNITS;
+      });
+      
+      const [inventory, setInventory] = useState(() => {
+        const saved = localStorage.getItem('skyzone_inventory');
+        return saved ? JSON.parse(saved) : INITIAL_INVENTORY;
+      });
+      
+      const [transactions, setTransactions] = useState(() => {
+        const saved = localStorage.getItem('skyzone_transactions');
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      // Modals State
+      const [sessionModalUnit, setSessionModalUnit] = useState(null);
+      const [fnbModalUnit, setFnbModalUnit] = useState(null);
+      const [checkoutModalUnit, setCheckoutModalUnit] = useState(null);
+      const [walkInModal, setWalkInModal] = useState(false);
+      const [addConsoleModal, setAddConsoleModal] = useState(false);
+      const [addFnbModal, setAddFnbModal] = useState(false);
+
+      // --- EFFECTS ---
+      useEffect(() => {
+        const timer = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(timer);
+      }, []);
+
+      // Local Storage Sync
+      useEffect(() => {
+        localStorage.setItem('skyzone_tiers', JSON.stringify(tiers));
+        localStorage.setItem('skyzone_units', JSON.stringify(units));
+        localStorage.setItem('skyzone_inventory', JSON.stringify(inventory));
+        localStorage.setItem('skyzone_transactions', JSON.stringify(transactions));
+      }, [tiers, units, inventory, transactions]);
+
+      // --- ACTIONS ---
+      const handleStartSession = (unitId, type, durationHours = 0) => {
+        const unit = units.find(u => u.id === unitId);
+        const tier = tiers[unit.tier];
+        const startTime = Date.now();
+        let endTime = null;
+        let prePaidAmount = 0;
+
+        if (type === 'prepaid') {
+          endTime = startTime + (durationHours * 3600 * 1000);
+          prePaidAmount = durationHours * tier.rate;
+        }
+
+        const session = {
+          id: `sess_${Date.now()}`,
+          type, 
+          startTime,
+          endTime,
+          prePaidAmount,
+          fnbOrders: []
+        };
+
+        setUnits(units.map(u => u.id === unitId ? { ...u, status: 'active', activeSession: session } : u));
+        setSessionModalUnit(null);
+      };
+
+      const handleAddFnB = (unitId, items) => {
+        if (items.length === 0) return;
+        const updatedInventory = [...inventory];
+
+        items.forEach(order => {
+          const invItem = updatedInventory.find(i => i.id === order.item.id);
+          if (invItem && invItem.stock >= order.qty) invItem.stock -= order.qty;
+        });
+
+        setInventory(updatedInventory);
+
+        if (unitId === 'walk-in') {
+          const fnbTotal = items.reduce((sum, order) => sum + (order.item.price * order.qty), 0);
+          const fnbCostTotal = items.reduce((sum, order) => sum + (order.item.cost * order.qty), 0);
+          
+          const newTransaction = {
+            id: `trx_${Date.now()}`,
+            type: 'walk-in',
+            fnbTotal,
+            fnbCostTotal,
+            rentalTotal: 0,
+            grandTotal: fnbTotal,
+            paymentMethod: 'Cash', 
+            timestamp: Date.now(),
+            items: items
+          };
+          setTransactions([newTransaction, ...transactions]);
+          setWalkInModal(false);
+        } else {
+          setUnits(units.map(u => {
+            if (u.id === unitId && u.activeSession) {
+              return {
+                ...u,
+                activeSession: { ...u.activeSession, fnbOrders: [...u.activeSession.fnbOrders, ...items] }
+              };
+            }
+            return u;
+          }));
+          setFnbModalUnit(null);
+        }
+      };
+
+      const handleQuickSellFnB = (item) => {
+        if (item.stock < 1) return;
+        
+        // Deduct stock
+        setInventory(inventory.map(i => i.id === item.id ? { ...i, stock: i.stock - 1 } : i));
+
+        // Record instantaneous transaction
+        const newTransaction = {
+          id: `trx_${Date.now()}`,
+          type: 'walk-in',
+          fnbTotal: item.price,
+          fnbCostTotal: item.cost,
+          rentalTotal: 0,
+          grandTotal: item.price,
+          paymentMethod: 'Cash',
+          timestamp: Date.now(),
+          items: [{ item, qty: 1 }]
+        };
+        setTransactions([newTransaction, ...transactions]);
+      };
+
+      const handleCheckout = (unitId, paymentMethod) => {
+        const unit = units.find(u => u.id === unitId);
+        if (!unit || !unit.activeSession) return;
+
+        const session = unit.activeSession;
+        const tier = tiers[unit.tier];
+        
+        let rentalTotal = 0;
+        if (session.type === 'prepaid') {
+          rentalTotal = session.prePaidAmount;
+        } else {
+          const elapsedMs = now - session.startTime;
+          const elapsedHours = Math.max(0, elapsedMs) / (1000 * 3600);
+          rentalTotal = Math.ceil(elapsedHours * tier.rate);
+        }
+
+        const fnbTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.price * order.qty), 0);
+        const fnbCostTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.cost * order.qty), 0);
+        const grandTotal = rentalTotal + fnbTotal;
+
+        const newTransaction = {
+          id: `trx_${Date.now()}`,
+          session_id: session.id,
+          unit_id: unit.id,
+          unit_name: unit.name,
+          type: 'rental',
+          rentalTotal,
+          fnbTotal,
+          fnbCostTotal,
+          grandTotal,
+          paymentMethod,
+          timestamp: Date.now(),
+          fnbOrders: session.fnbOrders
+        };
+
+        setTransactions([newTransaction, ...transactions]);
+        setUnits(units.map(u => u.id === unitId ? { ...u, status: 'idle', activeSession: null } : u));
+        setCheckoutModalUnit(null);
+      };
+
+      const handleAddConsole = (newUnit) => {
+        setUnits([...units, { ...newUnit, id: `unit_${Date.now()}`, status: 'idle', activeSession: null }]);
+        setAddConsoleModal(false);
+      };
+
+      const handleUpdateTierRate = (tierId, newRate) => {
+        setTiers({
+          ...tiers,
+          [tierId]: { ...tiers[tierId], rate: newRate }
+        });
+      };
+
+      const handleCancelSession = (unitId) => {
+        const unit = units.find(u => u.id === unitId);
+        if (!unit || !unit.activeSession) return;
+        
+        // Restore FnB stock if any was ordered but cancelled
+        if (unit.activeSession.fnbOrders.length > 0) {
+          const updatedInventory = [...inventory];
+          unit.activeSession.fnbOrders.forEach(order => {
+            const invItem = updatedInventory.find(i => i.id === order.item.id);
+            if (invItem) invItem.stock += order.qty;
+          });
+          setInventory(updatedInventory);
+        }
+        
+        setUnits(units.map(u => u.id === unitId ? { ...u, status: 'idle', activeSession: null } : u));
+      };
+
+      const handleAddFnbItem = (newItem) => {
+        setInventory([...inventory, { ...newItem, id: `fnb_${Date.now()}` }]);
+        setAddFnbModal(false);
+      };
+
+      const handleUpdateUnitName = (unitId, newName) => {
+        setUnits(units.map(u => u.id === unitId ? { ...u, name: newName } : u));
+      };
+
+      const handleDeleteTransaction = (transactionId) => {
+        const trxToDelete = transactions.find(t => t.id === transactionId);
+        if (!trxToDelete) return;
+
+        // Restore FnB stock if it was a mistake
+        const itemsToRestore = trxToDelete.type === 'walk-in' ? trxToDelete.items : trxToDelete.fnbOrders;
+        if (itemsToRestore && itemsToRestore.length > 0) {
+          const updatedInventory = [...inventory];
+          itemsToRestore.forEach(order => {
+            const invItem = updatedInventory.find(i => i.id === order.item.id);
+            if (invItem) invItem.stock += order.qty;
+          });
+          setInventory(updatedInventory);
+        }
+
+        setTransactions(transactions.filter(t => t.id !== transactionId));
+      };
+
+      // --- SUB-COMPONENTS ---
+      const SidebarItem = ({ icon: Icon, label, id, restricted }) => {
+        if (restricted && role !== 'admin') return null;
+        const active = activeTab === id;
+        return (
+          <button 
+            onClick={() => setActiveTab(id)}
+            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${
+              active 
+                ? 'bg-yellow-400 text-slate-900 font-bold shadow-lg shadow-yellow-400/20' 
+                : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+            }`}
+          >
+            <Icon size={20} className={active ? 'text-slate-900' : 'text-slate-400'} />
+            <span>{label}</span>
+          </button>
+        );
+      };
+
+      return (
+        <div className="min-h-screen bg-[#0B1120] text-slate-200 font-sans flex">
+          {/* SIDEBAR */}
+          <div className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col p-4 fixed h-full z-10 hidden md:flex">
+            <div className="flex items-center space-x-3 px-2 mb-8 mt-2">
+              <div className="bg-yellow-400 p-2 rounded-lg">
+                <Play size={24} className="text-slate-900 fill-current" />
+              </div>
+              <div>
+                <h1 className="text-xl font-black text-white tracking-wider">SKYZONE</h1>
+                <p className="text-xs text-yellow-400 font-bold uppercase tracking-widest">Hub</p>
+              </div>
+            </div>
+
+            <nav className="flex-1 space-y-2">
+              <SidebarItem icon={Monitor} label="Live Monitoring" id="monitoring" />
+              <SidebarItem icon={Coffee} label="FnB & Inventory" id="fnb" />
+              <SidebarItem icon={BarChart3} label="Financial Reports" id="reports" restricted={true} />
+              {role === 'admin' && <SidebarItem icon={Settings} label="System Settings" id="settings" restricted={true} />}
+            </nav>
+
+            {/* Role Toggle for Demo Purposes */}
+            <div className="mt-auto pt-4 border-t border-slate-800">
+              <div className="flex items-center justify-between px-2 mb-2">
+                <span className="text-xs font-semibold text-slate-500 uppercase">Current Role</span>
+              </div>
+              <button 
+                onClick={() => {
+                  setRole(role === 'admin' ? 'staff' : 'admin');
+                  if (role === 'admin' && (activeTab === 'settings' || activeTab === 'reports')) {
+                    setActiveTab('monitoring');
+                  }
+                }}
+                className="w-full flex items-center space-x-2 px-3 py-2 bg-slate-800 rounded-lg hover:bg-slate-700 transition"
+              >
+                <UserCircle size={18} className={role === 'admin' ? 'text-yellow-400' : 'text-blue-400'} />
+                <span className="text-sm font-medium capitalize">{role}</span>
+                <LogOut size={14} className="ml-auto text-slate-500" />
+              </button>
+            </div>
+          </div>
+
+          {/* MAIN CONTENT AREA */}
+          <div className="flex-1 md:ml-64 p-6 overflow-y-auto h-screen">
+            
+            {/* MOBILE HEADER */}
+            <div className="md:hidden flex items-center justify-between bg-slate-900 p-4 rounded-xl mb-6 border border-slate-800">
+              <div className="flex items-center space-x-2">
+                <div className="bg-yellow-400 p-1.5 rounded-lg">
+                  <Play size={18} className="text-slate-900 fill-current" />
+                </div>
+                <h1 className="text-lg font-black text-white">SKYZONE HUB</h1>
+              </div>
+              <button 
+                onClick={() => {
+                  setRole(role === 'admin' ? 'staff' : 'admin');
+                  if (role === 'admin' && (activeTab === 'settings' || activeTab === 'reports')) {
+                    setActiveTab('monitoring');
+                  }
+                }}
+                className="flex items-center space-x-1 text-sm bg-slate-800 px-2 py-1 rounded-md"
+              >
+                <span className="capitalize text-yellow-400">{role}</span>
+              </button>
+            </div>
+
+            {/* --- VIEW: LIVE MONITORING --- */}
+            {activeTab === 'monitoring' && (
+              <div className="space-y-6 animate-in">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-white">Live Monitoring Matrix</h2>
+                    <p className="text-slate-400 text-sm">Manage console sessions and active tabs.</p>
+                  </div>
+                  <div className="flex space-x-3">
+                    <button 
+                      onClick={() => setWalkInModal(true)}
+                      className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center shadow-lg border border-slate-700 transition"
+                    >
+                      <Coffee size={16} className="mr-2 text-yellow-400" /> Walk-in POS
+                    </button>
+                    {role === 'admin' && (
+                      <button 
+                        onClick={() => setAddConsoleModal(true)}
+                        className="bg-yellow-400 hover:bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg text-sm font-bold flex items-center shadow-lg shadow-yellow-400/20 transition"
+                      >
+                        <Plus size={16} className="mr-2" /> Add Console
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Matrix Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {units.map(unit => {
+                    const isActive = unit.status === 'active';
+                    const session = unit.activeSession;
+                    const tier = tiers[unit.tier];
+                    
+                    let timeDisplay = "00:00:00";
+                    let isTimeLow = false;
+                    let currentEstCost = 0;
+
+                    if (isActive && session) {
+                      if (session.type === 'prepaid') {
+                        const remaining = session.endTime - now;
+                        timeDisplay = remaining > 0 ? formatTime(remaining) : "00:00:00";
+                        isTimeLow = remaining > 0 && remaining < 300000;
+                        currentEstCost = session.prePaidAmount;
+                      } else {
+                        const elapsed = now - session.startTime;
+                        timeDisplay = formatTime(elapsed);
+                        currentEstCost = (elapsed / (1000 * 3600)) * tier.rate;
+                      }
+                      
+                      const fnbCost = session.fnbOrders.reduce((sum, order) => sum + (order.item.price * order.qty), 0);
+                      currentEstCost += fnbCost;
+                    }
+
+                    return (
+                      <div key={unit.id} className={`rounded-2xl border transition-all duration-300 overflow-hidden ${
+                        isActive 
+                          ? 'bg-slate-800 border-yellow-400/50 shadow-[0_0_15px_rgba(250,204,21,0.1)]' 
+                          : 'bg-slate-900 border-slate-800 hover:border-slate-700'
+                      }`}>
+                        {/* Card Header */}
+                        <div className="p-4 border-b border-slate-800/50 flex justify-between items-start">
+                          <div>
+                            <h3 className="font-bold text-white text-lg">{unit.name}</h3>
+                            <span className="text-xs text-slate-400 font-medium px-2 py-0.5 bg-slate-950 rounded-full inline-block mt-1">
+                              {tier.name}
+                            </span>
+                          </div>
+                          <div className={`px-2.5 py-1 rounded-md text-xs font-bold uppercase ${
+                            isActive ? 'bg-yellow-400 text-slate-900' : 'bg-slate-800 text-slate-400'
+                          }`}>
+                            {isActive ? 'In Use' : 'Idle'}
+                          </div>
+                        </div>
+
+                        {/* Card Body */}
+                        <div className="p-4">
+                          {isActive ? (
+                            <div className="space-y-4">
+                              <div className="flex justify-between items-end">
+                                <div>
+                                  <p className="text-xs text-slate-400 mb-1">
+                                    {session.type === 'prepaid' ? 'Remaining Time' : 'Elapsed Time'}
+                                  </p>
+                                  <div className={`text-3xl font-mono font-medium tracking-tight flex items-center ${isTimeLow ? 'text-red-400 animate-pulse' : 'text-white'}`}>
+                                    <Clock size={20} className="mr-2 opacity-50" />
+                                    {timeDisplay}
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-xs text-slate-400 mb-1">Total Bill</p>
+                                  <p className="text-lg font-bold text-yellow-400">{formatCurrency(currentEstCost)}</p>
+                                </div>
+                              </div>
+                              
+                              <div className="flex gap-2">
+                                <button 
+                                  onClick={() => setCheckoutModalUnit(unit)}
+                                  className="flex-1 bg-slate-900 hover:bg-slate-950 text-white border border-slate-700 py-2 rounded-lg text-sm font-semibold flex justify-center items-center transition"
+                                >
+                                  <Square size={14} className="mr-1 text-red-400 fill-current" /> Stop & Pay
+                                </button>
+                                <button 
+                                  onClick={() => handleCancelSession(unit.id)}
+                                  className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-2 rounded-lg flex items-center justify-center transition tooltip-trigger"
+                                  title="Cancel Session (No Bill)"
+                                >
+                                  <Ban size={16} className="text-red-400" />
+                                </button>
+                                <button 
+                                  onClick={() => setFnbModalUnit(unit)}
+                                  className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg flex items-center justify-center transition tooltip-trigger relative"
+                                  title="Add Food/Drink"
+                                >
+                                  <ShoppingCart size={16} />
+                                  {session.fnbOrders.length > 0 && (
+                                    <span className="absolute -top-1 -right-1 bg-yellow-400 text-slate-900 w-4 h-4 rounded-full text-[10px] font-bold flex items-center justify-center">
+                                      {session.fnbOrders.reduce((acc, curr) => acc + curr.qty, 0)}
+                                    </span>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center justify-center py-6 h-[124px]">
+                              <button 
+                                onClick={() => setSessionModalUnit(unit)}
+                                className="w-full bg-yellow-400 hover:bg-yellow-500 text-slate-900 py-3 rounded-xl font-bold flex justify-center items-center transition shadow-lg shadow-yellow-400/10"
+                              >
+                                <Play size={18} className="mr-2 fill-current" /> Start Session
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* --- VIEW: FNB INVENTORY --- */}
+            {activeTab === 'fnb' && (
+              <div className="space-y-6 animate-in">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h2 className="text-2xl font-bold text-white">Inventory Management</h2>
+                    <p className="text-slate-400 text-sm">Monitor stock levels and process walk-in sales.</p>
+                  </div>
+                  <div className="flex space-x-3">
+                    {role === 'admin' && (
+                      <button 
+                        onClick={() => setAddFnbModal(true)}
+                        className="bg-yellow-400 hover:bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg text-sm font-bold flex items-center shadow-lg transition"
+                      >
+                        <Plus size={16} className="mr-2" /> Add Item
+                      </button>
+                    )}
+                    <button 
+                      onClick={() => setWalkInModal(true)}
+                      className="bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 px-4 py-2 rounded-lg text-sm font-bold flex items-center shadow-lg transition"
+                    >
+                      <ShoppingCart size={16} className="mr-2 text-yellow-400" /> Walk-in Cart
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-slate-950 text-slate-400">
+                        <tr>
+                          <th className="px-6 py-4 font-medium">Item Name</th>
+                          <th className="px-6 py-4 font-medium">Category</th>
+                          <th className="px-6 py-4 font-medium">Stock</th>
+                          <th className="px-6 py-4 font-medium">Selling Price</th>
+                          {role === 'admin' && <th className="px-6 py-4 font-medium">Cost (Modal)</th>}
+                          <th className="px-6 py-4 font-medium text-right">Quick Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50">
+                        {inventory.map(item => (
+                          <tr key={item.id} className="hover:bg-slate-800/50 transition">
+                            <td className="px-6 py-4 font-medium text-white flex items-center">
+                              {item.name}
+                              {item.stock <= item.alert && (
+                                <span className="ml-2 bg-red-500/10 text-red-400 px-2 py-0.5 rounded text-[10px] uppercase font-bold flex items-center border border-red-500/20">
+                                  <AlertTriangle size={10} className="mr-1" /> Low Stock
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className="px-2 py-1 bg-slate-800 rounded text-slate-300 text-xs">
+                                {item.category}
+                              </span>
+                            </td>
+                            <td className={`px-6 py-4 font-bold ${item.stock <= item.alert ? 'text-red-400' : 'text-white'}`}>
+                              {item.stock}
+                            </td>
+                            <td className="px-6 py-4 text-yellow-400 font-medium">{formatCurrency(item.price)}</td>
+                            {role === 'admin' && <td className="px-6 py-4 text-slate-400">{formatCurrency(item.cost)}</td>}
+                            <td className="px-6 py-4 text-right">
+                              <button 
+                                onClick={() => handleQuickSellFnB(item)}
+                                disabled={item.stock === 0}
+                                className="bg-yellow-400/10 hover:bg-yellow-400/20 text-yellow-400 border border-yellow-400/30 px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center disabled:opacity-50 disabled:cursor-not-allowed transition"
+                              >
+                                <Zap size={14} className="mr-1" /> Sell 1x (Cash)
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* --- VIEW: FINANCIAL REPORTS --- */}
+            {activeTab === 'reports' && role === 'admin' && (
+              <DashboardAnalytics 
+                transactions={transactions} 
+                inventory={inventory} 
+                onDeleteTransaction={handleDeleteTransaction}
+              />
+            )}
+
+            {/* --- VIEW: SYSTEM SETTINGS --- */}
+            {activeTab === 'settings' && role === 'admin' && (
+              <SystemSettings 
+                tiers={tiers} 
+                onUpdateTier={handleUpdateTierRate}
+                units={units}
+                onUpdateUnitName={handleUpdateUnitName}
+              />
+            )}
+
+          </div>
+
+          {/* --- MODALS --- */}
+          
+          {/* Start Session Modal */}
+          {sessionModalUnit && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in">
+                <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+                  <h3 className="font-bold text-white flex items-center text-lg">
+                    <Play size={18} className="mr-2 text-yellow-400 fill-current" />
+                    Start {sessionModalUnit.name}
+                  </h3>
+                  <button onClick={() => setSessionModalUnit(null)} className="text-slate-400 hover:text-white">
+                    <X size={20} />
+                  </button>
+                </div>
+                <StartSessionForm 
+                  unit={sessionModalUnit} 
+                  onStart={handleStartSession} 
+                  tierInfo={tiers[sessionModalUnit.tier]}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Add FnB Modal (Cart) */}
+          {(fnbModalUnit || walkInModal) && (
+            <AddFnbModal 
+              isOpen={!!fnbModalUnit || walkInModal}
+              unit={fnbModalUnit}
+              inventory={inventory}
+              onClose={() => { setFnbModalUnit(null); setWalkInModal(false); }}
+              onAdd={(items) => handleAddFnB(fnbModalUnit ? fnbModalUnit.id : 'walk-in', items)}
+            />
+          )}
+
+          {/* Checkout Modal */}
+          {checkoutModalUnit && (
+            <CheckoutModal 
+              unit={checkoutModalUnit}
+              tierInfo={tiers[checkoutModalUnit.tier]}
+              now={now}
+              onClose={() => setCheckoutModalUnit(null)}
+              onConfirm={(method) => handleCheckout(checkoutModalUnit.id, method)}
+            />
+          )}
+
+          {/* Add Console Modal (Admin) */}
+          {addConsoleModal && (
+            <AddConsoleModal 
+              tiers={tiers}
+              onClose={() => setAddConsoleModal(false)}
+              onAdd={handleAddConsole}
+            />
+          )}
+
+          {/* Add Fnb Item Modal (Admin) */}
+          {addFnbModal && (
+            <AddFnbItemModal
+              onClose={() => setAddFnbModal(false)}
+              onAdd={handleAddFnbItem}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // --- SUB-COMPONENTS & MODALS (Newly Implemented) ---
+
+    function StartSessionForm({ unit, onStart, tierInfo }) {
+      const [type, setType] = useState('pay-as-you-go');
+      const [hours, setHours] = useState(1);
+      
+      return (
+        <div className="p-6 space-y-5">
+          <div>
+            <label className="text-sm font-medium text-slate-300 block mb-2">Session Type</label>
+            <div className="flex space-x-2">
+              <button 
+                onClick={() => setType('pay-as-you-go')} 
+                className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition ${type === 'pay-as-you-go' ? 'bg-yellow-400 text-slate-900 shadow-md' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              >
+                Pay As You Go
+              </button>
+              <button 
+                onClick={() => setType('prepaid')} 
+                className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition ${type === 'prepaid' ? 'bg-yellow-400 text-slate-900 shadow-md' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              >
+                Prepaid (Hours)
+              </button>
+            </div>
+          </div>
+          
+          {type === 'prepaid' && (
+            <div className="animate-in">
+              <label className="text-sm font-medium text-slate-300 block mb-2">Duration (Hours)</label>
+              <input 
+                type="number" 
+                min="1" 
+                value={hours} 
+                onChange={(e) => setHours(Math.max(1, Number(e.target.value)))} 
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-yellow-400 text-lg" 
+              />
+              <p className="text-xs text-slate-400 mt-2">Estimated cost: <span className="text-yellow-400 font-bold">{formatCurrency(hours * tierInfo.rate)}</span></p>
+            </div>
+          )}
+          
+          <button 
+            onClick={() => onStart(unit.id, type, type === 'prepaid' ? hours : 0)} 
+            className="w-full bg-yellow-400 text-slate-900 font-bold py-3.5 rounded-xl shadow-lg hover:bg-yellow-500 transition mt-2 flex items-center justify-center"
+          >
+            <Play size={18} className="mr-2 fill-current" /> Start Session Now
+          </button>
+        </div>
+      );
+    }
+
+    function AddFnbModal({ isOpen, unit, inventory, onClose, onAdd }) {
+      const [cart, setCart] = useState([]);
+      if (!isOpen) return null;
+
+      const addToCart = (item) => {
+        const existing = cart.find(c => c.item.id === item.id);
+        if (existing) {
+          if (existing.qty < item.stock) {
+            setCart(cart.map(c => c.item.id === item.id ? { ...c, qty: c.qty + 1 } : c));
+          }
+        } else {
+          if (item.stock > 0) {
+            setCart([...cart, { item, qty: 1 }]);
+          }
+        }
+      };
+
+      const removeFromCart = (itemId) => {
+        const existing = cart.find(c => c.item.id === itemId);
+        if (existing.qty === 1) {
+          setCart(cart.filter(c => c.item.id !== itemId));
+        } else {
+          setCart(cart.map(c => c.item.id === itemId ? { ...c, qty: c.qty - 1 } : c));
+        }
+      };
+
+      const total = cart.reduce((sum, c) => sum + (c.item.price * c.qty), 0);
+
+      return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in">
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+              <h3 className="font-bold text-white flex items-center text-lg">
+                <ShoppingCart size={18} className="mr-2 text-yellow-400" />
+                Add F&B {unit ? `to ${unit.name}` : '(Walk-in POS)'}
+              </h3>
+              <button onClick={onClose} className="text-slate-400 hover:text-white transition"><X size={20} /></button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-5 grid grid-cols-1 md:grid-cols-5 gap-6">
+              
+              {/* Inventory List */}
+              <div className="md:col-span-3 space-y-3">
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-slate-800 pb-2">Available Items</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {inventory.filter(i => i.stock > 0).map(item => (
+                    <div key={item.id} className="flex justify-between items-center p-3 bg-slate-800/40 rounded-xl border border-slate-700/50 hover:border-yellow-400/30 transition group">
+                      <div>
+                        <div className="font-medium text-white text-sm">{item.name}</div>
+                        <div className="text-xs mt-1">
+                          <span className="text-yellow-400 font-semibold">{formatCurrency(item.price)}</span>
+                          <span className="text-slate-500 mx-1">•</span>
+                          <span className="text-slate-400">Stock: {item.stock}</span>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={() => addToCart(item)} 
+                        className="p-2 bg-slate-700 hover:bg-yellow-400 hover:text-slate-900 text-white rounded-lg transition"
+                      >
+                        <Plus size={16} />
+                      </button>
+                    </div>
+                  ))}
+                  {inventory.filter(i => i.stock > 0).length === 0 && (
+                     <div className="col-span-2 py-8 text-center text-slate-500 text-sm">All F&B items are out of stock.</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Cart */}
+              <div className="md:col-span-2 bg-slate-950 p-5 rounded-2xl border border-slate-800 flex flex-col h-full shadow-inner">
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-slate-800 pb-2">Current Order</h4>
+                
+                <div className="flex-1 overflow-y-auto space-y-3 pr-2">
+                  {cart.length === 0 ? <div className="text-slate-600 text-sm text-center py-10 flex flex-col items-center"><ShoppingCart size={32} className="mb-3 opacity-20"/> Cart is empty</div> :
+                    cart.map(c => (
+                      <div key={c.item.id} className="flex flex-col text-sm bg-slate-900/50 p-2.5 rounded-lg border border-slate-800">
+                        <div className="text-white font-medium truncate mb-2">{c.item.name}</div>
+                        <div className="flex justify-between items-center">
+                          <div className="text-yellow-400 font-bold">{formatCurrency(c.item.price * c.qty)}</div>
+                          <div className="flex items-center space-x-2 bg-slate-800 rounded-lg px-1 py-1">
+                            <button onClick={() => removeFromCart(c.item.id)} className="p-1 text-slate-400 hover:text-white hover:bg-slate-700 rounded"><Minus size={14}/></button>
+                            <span className="text-white font-bold w-6 text-center">{c.qty}</span>
+                            <button onClick={() => addToCart(c.item)} className="p-1 text-slate-400 hover:text-white hover:bg-slate-700 rounded"><Plus size={14}/></button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  }
+                </div>
+                
+                <div className="pt-4 mt-4">
+                  <div className="flex justify-between items-center mb-4 bg-slate-900 p-3 rounded-lg border border-slate-800">
+                    <span className="text-slate-300 font-medium">Total Bill</span>
+                    <span className="text-xl font-black text-yellow-400">{formatCurrency(total)}</span>
+                  </div>
+                  <button 
+                    onClick={() => onAdd(cart)} 
+                    disabled={cart.length === 0} 
+                    className="w-full bg-yellow-400 text-slate-900 font-bold py-3.5 rounded-xl shadow-lg hover:bg-yellow-500 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                  >
+                    <Check size={18} className="mr-2"/> Confirm Order
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    function CheckoutModal({ unit, tierInfo, now, onClose, onConfirm }) {
+      const [method, setMethod] = useState('Cash');
+      if (!unit || !unit.activeSession) return null;
+
+      const session = unit.activeSession;
+      let rentalTotal = 0;
+      if (session.type === 'prepaid') {
+        rentalTotal = session.prePaidAmount;
+      } else {
+        const elapsedMs = now - session.startTime;
+        const elapsedHours = Math.max(0, elapsedMs) / (1000 * 3600);
+        rentalTotal = Math.ceil(elapsedHours * tierInfo.rate);
+      }
+      const fnbTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.price * order.qty), 0);
+      const grandTotal = rentalTotal + fnbTotal;
+
+      return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in">
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+              <h3 className="font-bold text-white flex items-center text-lg">
+                <Square size={18} className="mr-2 text-red-400 fill-current" /> Checkout - {unit.name}
+              </h3>
+              <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20} /></button>
+            </div>
+            
+            <div className="p-6 space-y-6">
+              <div className="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
+                <div className="flex justify-between text-slate-400 text-sm">
+                  <span>Console Rental ({tierInfo.name}):</span> 
+                  <span className="text-white font-medium">{formatCurrency(rentalTotal)}</span>
+                </div>
+                {session.fnbOrders.length > 0 && (
+                  <div className="flex justify-between text-slate-400 text-sm">
+                    <span>F&B Total ({session.fnbOrders.reduce((a,b)=>a+b.qty,0)} items):</span> 
+                    <span className="text-white font-medium">{formatCurrency(fnbTotal)}</span>
+                  </div>
+                )}
+                <div className="pt-3 mt-1 border-t border-slate-800 flex justify-between items-center text-lg font-black">
+                  <span className="text-white">Grand Total:</span>
+                  <span className="text-yellow-400 text-2xl">{formatCurrency(grandTotal)}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-slate-300 block mb-3">Select Payment Method</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button 
+                    onClick={() => setMethod('Cash')} 
+                    className={`py-3.5 rounded-xl text-sm font-bold flex items-center justify-center transition border ${method === 'Cash' ? 'bg-yellow-400 text-slate-900 border-yellow-400' : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'}`}
+                  >
+                    <Banknote size={18} className="mr-2"/> Cash
+                  </button>
+                  <button 
+                    onClick={() => setMethod('QRIS')} 
+                    className={`py-3.5 rounded-xl text-sm font-bold flex items-center justify-center transition border ${method === 'QRIS' ? 'bg-purple-500 text-white border-purple-500' : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'}`}
+                  >
+                    <CreditCard size={18} className="mr-2"/> QRIS
+                  </button>
+                </div>
+              </div>
+
+              <button 
+                onClick={() => onConfirm(method)} 
+                className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3.5 rounded-xl shadow-lg transition flex justify-center items-center mt-2"
+              >
+                <Check size={18} className="mr-2" /> Complete Payment
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    function AddConsoleModal({ tiers, onClose, onAdd }) {
+      const [name, setName] = useState('');
+      const [tier, setTier] = useState(Object.keys(tiers)[0]);
+      
+      return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in">
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+              <h3 className="font-bold text-white flex items-center text-lg">
+                <Plus size={18} className="mr-2 text-yellow-400" /> Add New Console
+              </h3>
+              <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20} /></button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="text-sm font-medium text-slate-300 block mb-2">Display Name</label>
+                <input 
+                  type="text" 
+                  value={name} 
+                  onChange={e => setName(e.target.value)} 
+                  placeholder="e.g. PS5 VIP 03" 
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-yellow-400 transition" 
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-slate-300 block mb-2">Pricing Tier</label>
+                <select 
+                  value={tier} 
+                  onChange={e => setTier(e.target.value)} 
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-yellow-400 appearance-none"
+                >
+                  {Object.values(tiers).map(t => (
+                    <option key={t.id} value={t.id}>{t.name} ({formatCurrency(t.rate)}/hr)</option>
+                  ))}
+                </select>
+              </div>
+              <button 
+                onClick={() => { if(name.trim()) onAdd({ name: name.trim(), tier }) }} 
+                disabled={!name.trim()}
+                className="w-full bg-yellow-400 text-slate-900 font-bold py-3.5 rounded-xl shadow-lg hover:bg-yellow-500 transition mt-6 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Create Console Unit
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    // --- EXISTING SUB-COMPONENTS (From original code) ---
+
+    function SystemSettings({ tiers, onUpdateTier, units, onUpdateUnitName }) {
+      const [editingTier, setEditingTier] = useState(null);
+      const [editValue, setEditValue] = useState('');
+
+      const [editingUnit, setEditingUnit] = useState(null);
+      const [editUnitName, setEditUnitName] = useState('');
+
+      const handleEdit = (tier) => {
+        setEditingTier(tier.id);
+        setEditValue(tier.rate);
+      };
+
+      const handleSave = (tierId) => {
+        const val = parseInt(editValue, 10);
+        if (!isNaN(val) && val >= 0) {
+          onUpdateTier(tierId, val);
+        }
+        setEditingTier(null);
+      };
+
+      const handleEditUnit = (unit) => {
+        setEditingUnit(unit.id);
+        setEditUnitName(unit.name);
+      };
+
+      const handleSaveUnit = (unitId) => {
+        if (editUnitName.trim()) {
+          onUpdateUnitName(unitId, editUnitName.trim());
+        }
+        setEditingUnit(null);
+      };
+
+      return (
+        <div className="space-y-6 animate-in pb-10">
+          <div>
+            <h2 className="text-2xl font-bold text-white">System Settings</h2>
+            <p className="text-slate-400 text-sm">Configure global application variables and pricing.</p>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg max-w-3xl">
+            <div className="p-5 border-b border-slate-800 bg-slate-950 flex justify-between items-center">
+              <h3 className="font-bold text-white text-lg flex items-center">
+                <Monitor size={18} className="mr-2 text-yellow-400" />
+                PlayStation Hourly Rates (Tiers)
+              </h3>
+            </div>
+            <div className="p-0">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-900 text-slate-400 border-b border-slate-800">
+                  <tr>
+                    <th className="px-6 py-4 font-medium">Tier ID</th>
+                    <th className="px-6 py-4 font-medium">Display Name</th>
+                    <th className="px-6 py-4 font-medium">Hourly Rate</th>
+                    <th className="px-6 py-4 font-medium text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/50">
+                  {Object.values(tiers).map(tier => (
+                    <tr key={tier.id} className="hover:bg-slate-800/30 transition">
+                      <td className="px-6 py-4 text-slate-400 font-mono text-xs">{tier.id}</td>
+                      <td className="px-6 py-4 font-medium text-white">{tier.name}</td>
+                      <td className="px-6 py-4">
+                        {editingTier === tier.id ? (
+                          <div className="flex items-center max-w-[150px]">
+                            <span className="text-slate-400 mr-2">Rp</span>
+                            <input
+                              type="number"
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-600 rounded px-2 py-1 text-white focus:outline-none focus:border-yellow-400 text-sm"
+                              autoFocus
+                            />
+                          </div>
+                        ) : (
+                          <span className="text-yellow-400 font-bold">{formatCurrency(tier.rate)}</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        {editingTier === tier.id ? (
+                          <button 
+                            onClick={() => handleSave(tier.id)}
+                            className="bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center transition"
+                          >
+                            <Save size={14} className="mr-1" /> Save
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={() => handleEdit(tier)}
+                            className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center transition"
+                          >
+                            <Edit2 size={14} className="mr-1" /> Edit Rate
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg max-w-3xl">
+            <div className="p-5 border-b border-slate-800 bg-slate-950 flex justify-between items-center">
+              <h3 className="font-bold text-white text-lg flex items-center">
+                <Monitor size={18} className="mr-2 text-blue-400" />
+                PlayStation Units Configuration
+              </h3>
+            </div>
+            <div className="p-0 max-h-96 overflow-y-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-900 text-slate-400 border-b border-slate-800 sticky top-0">
+                  <tr>
+                    <th className="px-6 py-4 font-medium">Unit ID</th>
+                    <th className="px-6 py-4 font-medium">Display Name</th>
+                    <th className="px-6 py-4 font-medium">Tier</th>
+                    <th className="px-6 py-4 font-medium text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/50">
+                  {units.map(unit => (
+                    <tr key={unit.id} className="hover:bg-slate-800/30 transition">
+                      <td className="px-6 py-4 text-slate-400 font-mono text-xs">{unit.id}</td>
+                      <td className="px-6 py-4 font-medium text-white">
+                        {editingUnit === unit.id ? (
+                          <input
+                            type="text"
+                            value={editUnitName}
+                            onChange={(e) => setEditUnitName(e.target.value)}
+                            className="w-full max-w-[200px] bg-slate-950 border border-slate-600 rounded px-2 py-1 text-white focus:outline-none focus:border-yellow-400 text-sm"
+                            autoFocus
+                          />
+                        ) : (
+                          unit.name
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-slate-400">
+                        <span className="px-2 py-1 bg-slate-950 rounded text-xs">
+                          {tiers[unit.tier]?.name || unit.tier}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        {editingUnit === unit.id ? (
+                          <button 
+                            onClick={() => handleSaveUnit(unit.id)}
+                            className="bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center transition"
+                          >
+                            <Save size={14} className="mr-1" /> Save
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={() => handleEditUnit(unit)}
+                            className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center transition"
+                          >
+                            <Edit2 size={14} className="mr-1" /> Rename
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function DashboardAnalytics({ transactions, inventory, onDeleteTransaction }) {
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      
+      const todaysTrx = transactions.filter(t => t.timestamp >= today.getTime());
+      
+      const totalRevenue = todaysTrx.reduce((sum, t) => sum + t.grandTotal, 0);
+      const rentalRevenue = todaysTrx.reduce((sum, t) => sum + (t.rentalTotal || 0), 0);
+      const fnbRevenue = todaysTrx.reduce((sum, t) => sum + (t.fnbTotal || 0), 0);
+      
+      const fnbCost = todaysTrx.reduce((sum, t) => {
+        let cost = 0;
+        if (t.fnbCostTotal !== undefined) {
+          cost = t.fnbCostTotal;
+        } else if (t.items) {
+          cost = t.items.reduce((s, order) => s + (order.item.cost * order.qty), 0);
+        } else if (t.fnbOrders) {
+          cost = t.fnbOrders.reduce((s, order) => s + (order.item.cost * order.qty), 0);
+        }
+        return sum + cost;
+      }, 0);
+
+      const fnbProfit = fnbRevenue - fnbCost;
+      const totalProfit = rentalRevenue + fnbProfit; 
+      
+      const qrisRevenue = todaysTrx.filter(t => t.paymentMethod === 'QRIS').reduce((sum, t) => sum + t.grandTotal, 0);
+      const cashRevenue = todaysTrx.filter(t => t.paymentMethod === 'Cash').reduce((sum, t) => sum + t.grandTotal, 0);
+
+      const unitProfit = {};
+      todaysTrx.filter(t => t.type === 'rental').forEach(t => {
+        if (!unitProfit[t.unit_id]) {
+          unitProfit[t.unit_id] = { name: t.unit_name, rental: 0, fnb: 0, total: 0 };
+        }
+        unitProfit[t.unit_id].rental += t.rentalTotal;
+        unitProfit[t.unit_id].fnb += t.fnbTotal;
+        unitProfit[t.unit_id].total += t.grandTotal;
+      });
+
+      return (
+        <div className="space-y-6 animate-in">
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-2xl font-bold text-white">Daily Summary Analytics</h2>
+              <p className="text-slate-400 text-sm">Real-time financial breakdown (Revenue & Net Profit).</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            
+            <div className="bg-gradient-to-br from-green-400 to-green-600 p-6 rounded-2xl text-slate-900 shadow-lg shadow-green-500/20 md:col-span-2">
+              <div className="flex justify-between items-start">
+                 <div>
+                   <div className="text-sm font-bold uppercase mb-1 opacity-80">Total Net Profit Today</div>
+                   <div className="text-3xl font-black">{formatCurrency(totalProfit)}</div>
+                 </div>
+                 <div className="bg-white/20 p-2 rounded-lg">
+                    <BarChart3 size={24} className="text-slate-900" />
+                 </div>
+              </div>
+              <div className="mt-4 pt-4 border-t border-slate-900/10 flex justify-between items-center text-sm font-medium">
+                 <span>Gross Revenue: <span className="font-bold">{formatCurrency(totalRevenue)}</span></span>
+                 <span className="bg-black/10 px-3 py-1 rounded-full">{todaysTrx.length} Trx</span>
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-center">
+              <div className="text-sm font-semibold text-slate-400 mb-3 flex items-center">
+                <Coffee size={14} className="mr-2 text-yellow-400"/> F&B Segmentation
+              </div>
+              <div className="flex justify-between items-end border-b border-slate-800/50 pb-2 mb-2">
+                <span className="text-slate-300 text-xs font-medium">Gross Revenue</span>
+                <span className="font-bold text-white">{formatCurrency(fnbRevenue)}</span>
+              </div>
+              <div className="flex justify-between items-end">
+                <span className="text-slate-300 text-xs font-medium">Net Profit</span>
+                <span className="font-bold text-green-400">{formatCurrency(fnbProfit)}</span>
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-center">
+              <div className="text-sm font-semibold text-slate-400 mb-3 flex items-center">
+                 <Play size={14} className="mr-2 text-blue-400"/> PS Rentals
+              </div>
+               <div className="flex justify-between items-end border-b border-slate-800/50 pb-2 mb-2">
+                <span className="text-slate-300 text-xs font-medium">Rental Revenue</span>
+                <span className="font-bold text-blue-400">{formatCurrency(rentalRevenue)}</span>
+              </div>
+              <div className="flex justify-between items-end">
+                 <span className="text-slate-300 text-xs font-medium text-right w-full text-slate-500">
+                   *100% Margin Calculated
+                 </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg">
+              <div className="p-5 border-b border-slate-800 bg-slate-950">
+                <h3 className="font-bold text-white text-lg">Per-Unit Revenue</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-900 text-slate-400 border-b border-slate-800">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">Unit</th>
+                      <th className="px-4 py-3 font-medium">Rental Income</th>
+                      <th className="px-4 py-3 font-medium">F&B Add-ons</th>
+                      <th className="px-4 py-3 font-medium text-right text-yellow-400">Total Billed</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/50">
+                    {Object.values(unitProfit).sort((a,b) => b.total - a.total).map((u, i) => (
+                      <tr key={i} className="hover:bg-slate-800/50">
+                        <td className="px-4 py-3 font-semibold text-white">{u.name}</td>
+                        <td className="px-4 py-3 text-slate-300">{formatCurrency(u.rental)}</td>
+                        <td className="px-4 py-3 text-slate-300">{formatCurrency(u.fnb)}</td>
+                        <td className="px-4 py-3 font-bold text-yellow-400 text-right">{formatCurrency(u.total)}</td>
+                      </tr>
+                    ))}
+                    {Object.keys(unitProfit).length === 0 && (
+                      <tr><td colSpan="4" className="text-center py-6 text-slate-500">No active rental transactions today.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg flex flex-col max-h-[400px]">
+               <div className="p-5 border-b border-slate-800 bg-slate-950 flex justify-between items-center">
+                <h3 className="font-bold text-white text-lg">Latest Transactions</h3>
+                <div className="text-xs text-slate-400 flex space-x-3">
+                  <span><span className="text-purple-400 font-bold">QRIS:</span> {formatCurrency(qrisRevenue)}</span>
+                  <span><span className="text-yellow-400 font-bold">CASH:</span> {formatCurrency(cashRevenue)}</span>
+                </div>
+              </div>
+              <div className="overflow-y-auto p-4 space-y-3 flex-1">
+                {todaysTrx.slice(0, 10).map((trx, i) => (
+                  <div key={i} className="bg-slate-950 p-4 rounded-lg border border-slate-800 flex justify-between items-center hover:border-slate-600 transition">
+                    <div>
+                      <div className="font-semibold text-white mb-1">
+                        {trx.type === 'walk-in' ? 'Walk-in FnB Sale' : `Session - ${trx.unit_name}`}
+                      </div>
+                      <div className="text-xs text-slate-400 flex items-center">
+                        <Clock size={12} className="mr-1" />
+                        {new Date(trx.timestamp).toLocaleTimeString('id-ID')} 
+                        <span className="mx-2">•</span> 
+                        {trx.paymentMethod === 'QRIS' ? <CreditCard size={12} className="mr-1 text-purple-400"/> : <Banknote size={12} className="mr-1 text-yellow-400"/>}
+                        {trx.paymentMethod}
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-3">
+                      <div className="text-right">
+                        <div className="font-bold text-yellow-400">{formatCurrency(trx.grandTotal)}</div>
+                        {trx.type === 'walk-in' && <div className="text-[10px] text-green-400">Profit: +{formatCurrency((trx.fnbTotal || 0) - (trx.fnbCostTotal || 0))}</div>}
+                      </div>
+                      <button 
+                        onClick={() => onDeleteTransaction(trx.id)}
+                        className="p-2 bg-slate-900/50 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-lg transition border border-slate-800 hover:border-red-500/30"
+                        title="Delete Transaction (Restores F&B Stock)"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {todaysTrx.length === 0 && (
+                  <div className="text-center py-10 text-slate-500">No transactions recorded yet.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function AddFnbItemModal({ onClose, onAdd }) {
+      const [formData, setFormData] = useState({
+        name: '',
+        sku: '',
+        category: 'Food',
+        cost: '',
+        price: '',
+        stock: '',
+        alert: '5'
+      });
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (!formData.name) return;
+
+        onAdd({
+          name: formData.name,
+          sku: formData.sku || `SKU${Math.floor(Math.random() * 10000)}`,
+          category: formData.category,
+          cost: parseInt(formData.cost) || 0,
+          price: parseInt(formData.price) || 0,
+          stock: parseInt(formData.stock) || 0,
+          alert: parseInt(formData.alert) || 5,
+        });
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in">
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+              <h3 className="font-bold text-white flex items-center">
+                <Plus size={18} className="mr-2 text-yellow-400" />
+                Add F&B Item
+              </h3>
+              <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20} /></button>
+            </div>
+            
+            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="text-sm font-medium text-slate-300 block mb-1">Item Name</label>
+                <input 
+                  type="text" required value={formData.name}
+                  onChange={(e) => setFormData({...formData, name: e.target.value})}
+                  placeholder="e.g. Potato Chips"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-yellow-400"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium text-slate-300 block mb-1">Category</label>
+                  <select 
+                    value={formData.category}
+                    onChange={(e) => setFormData({...formData, category: e.target.value})}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-yellow-400"
+                  >
+                    <option value="Food">Food</option>
+                    <option value="Drink">Drink</option>
+                    <option value="Misc">Misc</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 block mb-1">SKU</label>
+                  <input 
+                    type="text" value={formData.sku}
+                    onChange={(e) => setFormData({...formData, sku: e.target.value})}
+                    placeholder="Optional"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-yellow-400"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                 <div>
+                  <label className="text-sm font-medium text-slate-300 block mb-1">Cost (Modal)</label>
+                  <input 
+                    type="number" required value={formData.cost}
+                    onChange={(e) => setFormData({...formData, cost: e.target.value})}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-yellow-400"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 block mb-1">Selling Price</label>
+                  <input 
+                    type="number" required value={formData.price}
+                    onChange={(e) => setFormData({...formData, price: e.target.value})}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-yellow-400"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                 <div>
+                  <label className="text-sm font-medium text-slate-300 block mb-1">Initial Stock</label>
+                  <input 
+                    type="number" required value={formData.stock}
+                    onChange={(e) => setFormData({...formData, stock: e.target.value})}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-yellow-400"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 block mb-1">Low Alert At</label>
+                  <input 
+                    type="number" value={formData.alert}
+                    onChange={(e) => setFormData({...formData, alert: e.target.value})}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-yellow-400"
+                  />
+                </div>
+              </div>
+              
+              <button
+                type="submit"
+                className="w-full bg-yellow-400 text-slate-900 font-bold py-3.5 rounded-xl shadow-lg hover:bg-yellow-500 transition mt-4"
+              >
+                Save F&B Item
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    // --- RENDER ---
+    const root = createRoot(document.getElementById('root'));
+    root.render(<SkyzoneHub />);
+  </script>
+</body>
+</html>
