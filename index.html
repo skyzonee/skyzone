@@ -7,16 +7,6 @@
   
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Import Map to resolve Babel's auto-generated JSX runtime imports -->
-  <script type="importmap">
-    {
-      "imports": {
-        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
-        "react/jsx-dev-runtime": "https://esm.sh/react@18.2.0/jsx-dev-runtime"
-      }
-    }
-  </script>
   
   <!-- Babel Standalone for compiling JSX in the browser -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -58,8 +48,7 @@
     import { 
       Monitor, Coffee, BarChart3, Settings, Play, Square, ShoppingCart, 
       Plus, Minus, AlertTriangle, Clock, LogOut, UserCircle, CreditCard, 
-      Banknote, Check, X, Edit2, Save, Zap, Ban, Trash2, Timer,
-      ChevronLeft, ChevronRight, Calendar
+      Banknote, Check, X, Edit2, Save, Zap, Ban, Trash2, Timer
     } from 'https://esm.sh/lucide-react@0.292.0';
 
     // --- INITIAL DATA SEEDING ---
@@ -1186,7 +1175,6 @@
         rentalTotal = Math.ceil(elapsedHours * tierInfo.rate);
       }
       const fnbTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.price * order.qty), 0);
-      const fnbCostTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.cost * order.qty), 0);
       const grandTotal = rentalTotal + fnbTotal;
 
       return (
@@ -1513,38 +1501,35 @@
 
     // --- FINANCIAL SUMMARY & REPORTS VIEW ---
     function DashboardAnalytics({ transactions, inventory, onDeleteTransaction }) {
-      // Setup state for date filtering
-      const getInitialDateStr = () => {
+      // Calculate the start of the financial day (06:00 AM Jakarta Time Zone WIB / UTC+7)
+      const getJakartaFinancialDayStart = () => {
         const wibOffset = 7 * 60 * 60 * 1000; // 7 hours in ms
-        const wibDate = new Date(Date.now() + wibOffset);
+        const absoluteWibMs = Date.now() + wibOffset;
+        const wibDate = new Date(absoluteWibMs);
+        
+        const wibYear = wibDate.getUTCFullYear();
+        const wibMonth = wibDate.getUTCMonth();
+        const wibDay = wibDate.getUTCDate();
+        const wibHours = wibDate.getUTCHours();
+        
+        let financialWibDay = wibDay;
         // If before 06:00 AM WIB, it belongs to the previous business day
-        if (wibDate.getUTCHours() < 6) {
-           wibDate.setUTCDate(wibDate.getUTCDate() - 1);
+        if (wibHours < 6) {
+          financialWibDay -= 1;
         }
-        return `${wibDate.getUTCFullYear()}-${String(wibDate.getUTCMonth()+1).padStart(2,'0')}-${String(wibDate.getUTCDate()).padStart(2,'0')}`;
+        
+        const financialDayStartWibMs = Date.UTC(wibYear, wibMonth, financialWibDay, 6, 0, 0, 0);
+        return financialDayStartWibMs - wibOffset; // Return standard Unix Timestamp
       };
 
-      const [selectedDateStr, setSelectedDateStr] = useState(getInitialDateStr());
-
-      const getCycleRange = (dateStr) => {
-        if (!dateStr) return { startMs: 0, endMs: 0 };
-        const [yyyy, mm, dd] = dateStr.split('-').map(Number);
-        const wibOffset = 7 * 60 * 60 * 1000;
-        // Start time is 06:00:00 WIB on the selected date
-        const startMs = Date.UTC(yyyy, mm - 1, dd, 6, 0, 0, 0) - wibOffset;
-        const endMs = startMs + (24 * 60 * 60 * 1000);
-        return { startMs, endMs };
-      };
-
-      const { startMs: cycleStartMs, endMs: cycleEndMs } = getCycleRange(selectedDateStr);
-
-      const filteredTrx = transactions.filter(t => t.timestamp >= cycleStartMs && t.timestamp < cycleEndMs);
+      const financialDayStart = getJakartaFinancialDayStart();
+      const todaysTrx = transactions.filter(t => t.timestamp >= financialDayStart);
       
-      const totalRevenue = filteredTrx.reduce((sum, t) => sum + t.grandTotal, 0);
-      const rentalRevenue = filteredTrx.reduce((sum, t) => sum + (t.rentalTotal || 0), 0);
-      const fnbRevenue = filteredTrx.reduce((sum, t) => sum + (t.fnbTotal || 0), 0);
+      const totalRevenue = todaysTrx.reduce((sum, t) => sum + t.grandTotal, 0);
+      const rentalRevenue = todaysTrx.reduce((sum, t) => sum + (t.rentalTotal || 0), 0);
+      const fnbRevenue = todaysTrx.reduce((sum, t) => sum + (t.fnbTotal || 0), 0);
       
-      const fnbCost = filteredTrx.reduce((sum, t) => {
+      const fnbCost = todaysTrx.reduce((sum, t) => {
         let cost = 0;
         if (t.fnbCostTotal !== undefined) {
           cost = t.fnbCostTotal;
@@ -1559,11 +1544,11 @@
       const fnbProfit = fnbRevenue - fnbCost;
       const totalProfit = rentalRevenue + fnbProfit; 
       
-      const qrisRevenue = filteredTrx.filter(t => t.paymentMethod === 'QRIS').reduce((sum, t) => sum + t.grandTotal, 0);
-      const cashRevenue = filteredTrx.filter(t => t.paymentMethod === 'Cash').reduce((sum, t) => sum + t.grandTotal, 0);
+      const qrisRevenue = todaysTrx.filter(t => t.paymentMethod === 'QRIS').reduce((sum, t) => sum + t.grandTotal, 0);
+      const cashRevenue = todaysTrx.filter(t => t.paymentMethod === 'Cash').reduce((sum, t) => sum + t.grandTotal, 0);
 
       const unitProfit = {};
-      filteredTrx.filter(t => t.type === 'rental').forEach(t => {
+      todaysTrx.filter(t => t.type === 'rental').forEach(t => {
         if (!unitProfit[t.unit_id]) {
           unitProfit[t.unit_id] = { name: t.unit_name, rental: 0, fnb: 0, total: 0 };
         }
@@ -1573,8 +1558,8 @@
       });
 
       // Format Active Cycle display period in WIB (UTC+7)
-      const cycleStartWib = new Date(cycleStartMs + 7 * 60 * 60 * 1000);
-      const cycleEndWib = new Date(cycleEndMs + 7 * 60 * 60 * 1000);
+      const cycleStartWib = new Date(financialDayStart + 7 * 60 * 60 * 1000);
+      const cycleEndWib = new Date(financialDayStart + 24 * 60 * 60 * 1000 + 7 * 60 * 60 * 1000);
       
       const formatDateWib = (date) => {
         const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1582,45 +1567,14 @@
         return `${days[date.getUTCDay()]}, ${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()} - ${date.getUTCHours().toString().padStart(2, '0')}:${date.getUTCMinutes().toString().padStart(2, '0')} WIB`;
       };
 
-      const handlePrevDay = () => {
-        const [yyyy, mm, dd] = selectedDateStr.split('-').map(Number);
-        const d = new Date(Date.UTC(yyyy, mm - 1, dd - 1));
-        setSelectedDateStr(`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`);
-      };
-      
-      const handleNextDay = () => {
-        const [yyyy, mm, dd] = selectedDateStr.split('-').map(Number);
-        const d = new Date(Date.UTC(yyyy, mm - 1, dd + 1));
-        setSelectedDateStr(`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`);
-      };
-
       return (
         <div className="space-y-6 animate-in">
-          <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-2">
+          <div className="flex justify-between items-center">
             <div>
               <h2 className="text-2xl font-bold text-white">Daily Summary Analytics</h2>
               <p className="text-slate-400 text-sm mt-0.5">
                 Active Cycle: <span className="text-yellow-400 font-semibold">{formatDateWib(cycleStartWib)}</span> to <span className="text-yellow-400 font-semibold">{formatDateWib(cycleEndWib)}</span>
               </p>
-            </div>
-            
-            <div className="flex items-center space-x-1 bg-slate-900 border border-slate-700 rounded-lg p-1 w-fit shadow-lg">
-              <button onClick={handlePrevDay} className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded transition" title="Previous Day">
-                <ChevronLeft size={18} />
-              </button>
-              <div className="flex items-center space-x-2 px-3 border-l border-r border-slate-700">
-                <Calendar size={14} className="text-yellow-400" />
-                <input 
-                  type="date" 
-                  value={selectedDateStr}
-                  onChange={(e) => setSelectedDateStr(e.target.value)}
-                  className="bg-transparent text-white text-sm font-bold focus:outline-none cursor-pointer"
-                  style={{ colorScheme: 'dark' }}
-                />
-              </div>
-              <button onClick={handleNextDay} className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded transition" title="Next Day">
-                <ChevronRight size={18} />
-              </button>
             </div>
           </div>
 
@@ -1629,7 +1583,7 @@
             <div className="bg-gradient-to-br from-green-400 to-green-600 p-6 rounded-2xl text-slate-950 shadow-lg shadow-green-500/20 md:col-span-2">
               <div className="flex justify-between items-start">
                  <div>
-                   <div className="text-sm font-bold uppercase mb-1 opacity-80">Total Net Profit</div>
+                   <div className="text-sm font-bold uppercase mb-1 opacity-80">Total Net Profit Today</div>
                    <div className="text-3xl font-black">{formatCurrency(totalProfit)}</div>
                  </div>
                  <div className="bg-white/20 p-2 rounded-lg">
@@ -1638,7 +1592,7 @@
               </div>
               <div className="mt-4 pt-4 border-t border-slate-900/10 flex justify-between items-center text-sm font-medium">
                  <span>Gross Revenue: <span className="font-bold">{formatCurrency(totalRevenue)}</span></span>
-                 <span className="bg-black/10 px-3 py-1 rounded-full">{filteredTrx.length} Trx</span>
+                 <span className="bg-black/10 px-3 py-1 rounded-full">{todaysTrx.length} Trx</span>
               </div>
             </div>
 
@@ -1697,7 +1651,7 @@
                       </tr>
                     ))}
                     {Object.keys(unitProfit).length === 0 && (
-                      <tr><td colSpan="4" className="text-center py-6 text-slate-500">No active rental transactions for this date.</td></tr>
+                      <tr><td colSpan="4" className="text-center py-6 text-slate-500">No active rental transactions today.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -1713,7 +1667,7 @@
                 </div>
               </div>
               <div className="overflow-y-auto p-4 space-y-3 flex-1">
-                {filteredTrx.slice(0, 10).map((trx, i) => (
+                {todaysTrx.slice(0, 10).map((trx, i) => (
                   <div key={i} className="bg-slate-950 p-4 rounded-lg border border-slate-800 flex flex-col justify-between hover:border-slate-600 transition p-4">
                     <div className="flex justify-between items-start w-full">
                       <div>
@@ -1752,7 +1706,7 @@
                     )}
                   </div>
                 ))}
-                {filteredTrx.length === 0 && (
+                {todaysTrx.length === 0 && (
                   <div className="text-center py-10 text-slate-500">No transactions recorded yet.</div>
                 )}
               </div>
