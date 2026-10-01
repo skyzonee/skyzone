@@ -21,6 +21,10 @@
   <!-- Babel Standalone for compiling JSX in the browser -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+  <!-- Libraries for exporting receipts as PNG / PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
   <style>
     /* Custom Scrollbar for better UI */
     ::-webkit-scrollbar {
@@ -53,13 +57,13 @@
 
   <!-- Main React Application -->
   <script type="text/babel" data-type="module">
-    import React, { useState, useEffect, useMemo } from 'https://esm.sh/react@18.2.0';
+    import React, { useState, useEffect, useMemo, useRef } from 'https://esm.sh/react@18.2.0';
     import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
     import { 
       Monitor, Coffee, BarChart3, Settings, Play, Square, ShoppingCart, 
       Plus, Minus, AlertTriangle, Clock, LogOut, UserCircle, CreditCard, 
       Banknote, Check, X, Edit2, Save, Zap, Ban, Trash2, Timer,
-      ChevronLeft, ChevronRight, Calendar, Search
+      ChevronLeft, ChevronRight, Calendar, Search, Printer, Download, Image, FileText
     } from 'https://esm.sh/lucide-react@0.292.0';
 
     // --- INITIAL DATA SEEDING ---
@@ -131,6 +135,7 @@
       const [extendModalUnit, setExtendModalUnit] = useState(null);
       const [fnbModalUnit, setFnbModalUnit] = useState(null);
       const [checkoutModalUnit, setCheckoutModalUnit] = useState(null);
+      const [receiptTrx, setReceiptTrx] = useState(null);
       const [walkInModal, setWalkInModal] = useState(false);
       const [addConsoleModal, setAddConsoleModal] = useState(false);
       const [addFnbModal, setAddFnbModal] = useState(false);
@@ -337,6 +342,7 @@
         setTransactions([newTransaction, ...transactions]);
         setUnits(units.map(u => u.id === unitId ? { ...u, status: 'idle', activeSession: null } : u));
         setCheckoutModalUnit(null);
+        setReceiptTrx(newTransaction);
       };
 
       const handleAddConsole = (newUnit) => {
@@ -787,6 +793,7 @@
                 transactions={transactions} 
                 inventory={inventory} 
                 onDeleteTransaction={handleDeleteTransaction}
+                onViewReceipt={setReceiptTrx}
               />
             )}
 
@@ -921,6 +928,14 @@
               onSuccess={handlePinSuccess}
             />
           )}
+
+          {/* Receipt / Struk Export Modal - shown right after checkout, or when re-printing from history */}
+          {receiptTrx && (
+            <ReceiptModal
+              trx={receiptTrx}
+              onClose={() => setReceiptTrx(null)}
+            />
+          )}
         </div>
       );
     }
@@ -1024,6 +1039,176 @@
                   ⌫
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function ReceiptModal({ trx, onClose }) {
+      const receiptRef = useRef(null);
+      const [exporting, setExporting] = useState(false);
+
+      const orderedItems = trx.type === 'walk-in' ? trx.items : trx.fnbOrders;
+      const receiptNo = trx.id.replace('trx_', '').slice(-8).toUpperCase();
+      const dateObj = new Date(trx.timestamp);
+
+      const captureCanvas = async () => {
+        if (!window.html2canvas) {
+          alert('Library export belum siap, pastikan koneksi internet aktif lalu coba lagi.');
+          return null;
+        }
+        const node = receiptRef.current;
+        return await window.html2canvas(node, {
+          backgroundColor: '#ffffff',
+          scale: 2,
+          useCORS: true,
+          scrollX: 0,
+          scrollY: 0,
+          windowWidth: node.scrollWidth,
+          windowHeight: node.scrollHeight,
+          width: node.scrollWidth,
+          height: node.scrollHeight,
+        });
+      };
+
+      const handleDownloadPNG = async () => {
+        setExporting(true);
+        try {
+          const canvas = await captureCanvas();
+          if (!canvas) return;
+          const link = document.createElement('a');
+          link.download = `Struk-${receiptNo}.png`;
+          link.href = canvas.toDataURL('image/png');
+          link.click();
+        } catch (err) {
+          console.error(err);
+          alert('Gagal export struk ke PNG.');
+        } finally {
+          setExporting(false);
+        }
+      };
+
+      const handleDownloadPDF = async () => {
+        setExporting(true);
+        try {
+          const canvas = await captureCanvas();
+          if (!canvas || !window.jspdf) {
+            if (!window.jspdf) alert('Library PDF belum siap, pastikan koneksi internet aktif lalu coba lagi.');
+            return;
+          }
+          const { jsPDF } = window.jspdf;
+          const imgData = canvas.toDataURL('image/png');
+          const pdfWidth = 80; // mm - standard thermal receipt width
+          const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+          const pdf = new jsPDF({
+            orientation: 'portrait',
+            unit: 'mm',
+            format: [pdfWidth, pdfHeight],
+          });
+          pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+          pdf.save(`Struk-${receiptNo}.pdf`);
+        } catch (err) {
+          console.error(err);
+          alert('Gagal export struk ke PDF.');
+        } finally {
+          setExporting(false);
+        }
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in flex flex-col max-h-[90vh]">
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950 shrink-0">
+              <h3 className="font-bold text-white flex items-center">
+                <Printer size={18} className="mr-2 text-yellow-400" />
+                Struk Transaksi
+              </h3>
+              <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20} /></button>
+            </div>
+
+            <div className="p-5 overflow-y-auto bg-slate-800/40">
+              {/* The receipt itself - this exact element is captured when exporting to PNG/PDF */}
+              <div ref={receiptRef} className="bg-white text-slate-900 mx-auto p-6 font-mono text-xs" style={{ width: '320px', lineHeight: '1.6' }}>
+                <div className="text-center mb-3">
+                  <div className="font-black text-base tracking-wider">SKYZONE HUB</div>
+                  <div className="text-[10px] text-slate-600">PS Rental &amp; F&amp;B</div>
+                </div>
+                <div className="border-t border-dashed border-slate-400 my-2"></div>
+                <div className="flex justify-between text-[10px]">
+                  <span>No:</span><span>{receiptNo}</span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span>Tanggal:</span><span>{dateObj.toLocaleDateString('id-ID')} {dateObj.toLocaleTimeString('id-ID')}</span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span>Jenis:</span><span>{trx.type === 'walk-in' ? 'Walk-in F&B' : `Sewa - ${trx.unit_name}`}</span>
+                </div>
+                <div className="border-t border-dashed border-slate-400 my-2"></div>
+
+                <div>
+                  {trx.type !== 'walk-in' && (
+                    <div className="flex justify-between items-start gap-2 mb-1.5" style={{ lineHeight: '1.5' }}>
+                      <span>Waktu Sewa Konsol</span>
+                      <span className="whitespace-nowrap">{formatCurrency(trx.rentalTotal)}</span>
+                    </div>
+                  )}
+                  {orderedItems && orderedItems.map((order, idx) => (
+                    <div key={idx} className="flex justify-between items-start gap-2 mb-1.5" style={{ lineHeight: '1.5' }}>
+                      <span style={{ wordBreak: 'break-word' }}>{order.qty}x {order.item.name}</span>
+                      <span className="whitespace-nowrap">{formatCurrency(order.item.price * order.qty)}</span>
+                    </div>
+                  ))}
+                  {(!orderedItems || orderedItems.length === 0) && trx.type !== 'walk-in' && (
+                    <div className="text-slate-400 italic">Tidak ada pesanan F&amp;B.</div>
+                  )}
+                </div>
+
+                <div className="border-t border-dashed border-slate-400 my-2"></div>
+                <div className="flex justify-between font-bold text-sm">
+                  <span>TOTAL</span>
+                  <span>{formatCurrency(trx.grandTotal)}</span>
+                </div>
+                <div className="flex justify-between text-[10px] mt-1">
+                  <span>Metode Bayar:</span><span>{trx.paymentMethod}</span>
+                </div>
+
+                {trx.note && (
+                  <div className="mt-2 text-[10px] italic border-t border-dashed border-slate-400 pt-2">
+                    Catatan: {trx.note}
+                  </div>
+                )}
+
+                <div className="border-t border-dashed border-slate-400 my-2"></div>
+                <div className="text-center text-[10px] mt-3">
+                  Terima kasih atas kunjungan Anda!
+                </div>
+              </div>
+            </div>
+
+            <div className="p-5 border-t border-slate-800 bg-slate-950 shrink-0 space-y-2">
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={handleDownloadPNG}
+                  disabled={exporting}
+                  className="flex items-center justify-center py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-sm transition disabled:opacity-50"
+                >
+                  <Image size={16} className="mr-2" /> {exporting ? '...' : 'PNG'}
+                </button>
+                <button
+                  onClick={handleDownloadPDF}
+                  disabled={exporting}
+                  className="flex items-center justify-center py-3 rounded-xl bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-bold text-sm transition disabled:opacity-50"
+                >
+                  <FileText size={16} className="mr-2" /> {exporting ? '...' : 'PDF'}
+                </button>
+              </div>
+              <button
+                onClick={onClose}
+                className="w-full py-2.5 rounded-xl bg-transparent hover:bg-slate-800 text-slate-400 text-sm font-medium transition"
+              >
+                Tutup
+              </button>
             </div>
           </div>
         </div>
@@ -1689,7 +1874,7 @@
     }
 
     // --- FINANCIAL SUMMARY & REPORTS VIEW ---
-    function DashboardAnalytics({ transactions, inventory, onDeleteTransaction }) {
+    function DashboardAnalytics({ transactions, inventory, onDeleteTransaction, onViewReceipt }) {
       // Setup state for date filtering
       const getInitialDateStr = () => {
         const wibOffset = 7 * 60 * 60 * 1000; // 7 hours in ms
@@ -1914,6 +2099,13 @@
                           <div className="font-bold text-yellow-400">{formatCurrency(trx.grandTotal)}</div>
                           {trx.type === 'walk-in' && <div className="text-[10px] text-green-400">Profit: +{formatCurrency((trx.fnbTotal || 0) - (trx.fnbCostTotal || 0))}</div>}
                         </div>
+                        <button 
+                          onClick={() => onViewReceipt(trx)}
+                          className="p-2 bg-slate-900/50 hover:bg-yellow-400/20 text-slate-500 hover:text-yellow-400 rounded-lg transition border border-slate-800 hover:border-yellow-400/30"
+                          title="View / Export Receipt"
+                        >
+                          <Printer size={16} />
+                        </button>
                         <button 
                           onClick={() => onDeleteTransaction(trx.id)}
                           className="p-2 bg-slate-900/50 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-lg transition border border-slate-800 hover:border-red-500/30"
