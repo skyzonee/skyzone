@@ -67,12 +67,17 @@
     } from 'https://esm.sh/lucide-react@0.292.0';
 
     // --- INITIAL DATA SEEDING ---
+    // Each tier now carries two INDEPENDENT, manually-set rates:
+    // `rate`   = price for a full hour
+    // `rate30` = price for a 30-minute block
+    // They don't have to be exactly rate/2 - e.g. a full-hour booking can be
+    // priced at a discount compared to 2x the half-hour price.
     const INITIAL_TIERS = {
-      ps3_reg: { id: 'ps3_reg', name: 'PS3 Regular', rate: 5000 },
-      ps4_reg: { id: 'ps4_reg', name: 'PS4 Regular', rate: 10000 },
-      ps4_semi: { id: 'ps4_semi', name: 'PS4 Semi-VIP', rate: 15000 },
-      ps4_vip: { id: 'ps4_vip', name: 'PS4 VIP', rate: 20000 },
-      ps5_vip: { id: 'ps5_vip', name: 'PS5 VIP', rate: 30000 },
+      ps3_reg: { id: 'ps3_reg', name: 'PS3 Regular', rate: 8000, rate30: 4000 },
+      ps4_reg: { id: 'ps4_reg', name: 'PS4 Regular', rate: 10000, rate30: 5000 },
+      ps4_semi: { id: 'ps4_semi', name: 'PS4 Semi-VIP', rate: 20000, rate30: 10000 },
+      ps4_vip: { id: 'ps4_vip', name: 'PS4 VIP', rate: 30000, rate30: 15000 },
+      ps5_vip: { id: 'ps5_vip', name: 'PS5 VIP', rate: 36000, rate30: 18000 },
     };
 
     const INITIAL_UNITS = [
@@ -93,6 +98,25 @@
     // --- UTILITY FUNCTIONS ---
     const formatCurrency = (amount) => {
       return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(amount);
+    };
+
+    const formatDuration = (hours) => {
+      const totalMinutes = Math.round(hours * 60);
+      const h = Math.floor(totalMinutes / 60);
+      const m = totalMinutes % 60;
+      if (h > 0 && m > 0) return `${h}j ${m}m`;
+      if (h > 0) return `${h}j`;
+      return `${m}m`;
+    };
+
+    // Bills a duration using independently-set per-hour and per-30-minute rates.
+    // Any started 30-minute block is billed (rounded up), e.g. 1h15m = 1 full hour (rate) + 1 half-hour block (rate30).
+    const calculateBlockCost = (hours, tier) => {
+      if (!tier || hours <= 0) return 0;
+      const halfHourBlocks = Math.ceil(hours * 2 - 1e-9);
+      const fullHours = Math.floor(halfHourBlocks / 2);
+      const hasHalfHour = halfHourBlocks % 2 === 1;
+      return fullHours * tier.rate + (hasHalfHour ? (tier.rate30 ?? tier.rate / 2) : 0);
     };
 
     const formatTime = (ms) => {
@@ -171,7 +195,7 @@
 
         if (type === 'prepaid') {
           endTime = startTime + (durationHours * 3600 * 1000);
-          prePaidAmount = durationHours * tier.rate;
+          prePaidAmount = calculateBlockCost(durationHours, tier);
         }
 
         const session = {
@@ -199,7 +223,7 @@
                 // Add extended time to the current end time
                 endTime: u.activeSession.endTime + (additionalHours * 3600 * 1000),
                 // Add extended cost to the prepaid amount
-                prePaidAmount: u.activeSession.prePaidAmount + (additionalHours * tier.rate)
+                prePaidAmount: u.activeSession.prePaidAmount + calculateBlockCost(additionalHours, tier)
               }
             };
           }
@@ -316,7 +340,7 @@
         } else {
           const elapsedMs = now - session.startTime;
           const elapsedHours = Math.max(0, elapsedMs) / (1000 * 3600);
-          rentalTotal = Math.ceil(elapsedHours * tier.rate);
+          rentalTotal = calculateBlockCost(elapsedHours, tier);
         }
 
         const fnbTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.price * order.qty), 0);
@@ -350,10 +374,10 @@
         setAddConsoleModal(false);
       };
 
-      const handleUpdateTierRate = (tierId, newRate) => {
+      const handleUpdateTierRate = (tierId, newRates) => {
         setTiers({
           ...tiers,
-          [tierId]: { ...tiers[tierId], rate: newRate }
+          [tierId]: { ...tiers[tierId], ...newRates }
         });
       };
 
@@ -545,7 +569,7 @@
                       } else {
                         const elapsed = now - session.startTime;
                         timeDisplay = formatTime(elapsed);
-                        currentEstCost = (elapsed / (1000 * 3600)) * tier.rate;
+                        currentEstCost = calculateBlockCost(elapsed / (1000 * 3600), tier);
                       }
                       
                       const fnbCost = session.fnbOrders.reduce((sum, order) => sum + (order.item.price * order.qty), 0);
@@ -1220,6 +1244,10 @@
     // ExtendTime Modal for adding hours to prepaid sessions
     function ExtendTimeModal({ unit, tierInfo, onClose, onExtend }) {
       const [hours, setHours] = useState(1);
+
+      const adjustHours = (delta) => {
+        setHours(prev => Math.max(0.5, Math.round((prev + delta) * 2) / 2));
+      };
       
       return (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1234,19 +1262,47 @@
               </button>
             </div>
             <div className="p-6 space-y-5">
-              <div>
-                <label className="text-sm font-medium text-slate-300 block mb-2">Add Duration (Hours)</label>
-                <input 
-                  type="number" 
-                  min="1" 
-                  value={hours} 
-                  onChange={(e) => setHours(Math.max(1, Number(e.target.value)))} 
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-blue-400 text-lg" 
-                  autoFocus
-                />
-                <p className="text-xs text-slate-400 mt-2 flex justify-between">
+              <div className="space-y-3">
+                <label className="text-sm font-medium text-slate-300 block mb-2">Add Duration</label>
+
+                {/* Quick-select chips - includes a 30-minute option */}
+                <div className="flex flex-wrap gap-2">
+                  {QUICK_DURATIONS.map(q => (
+                    <button
+                      key={q}
+                      type="button"
+                      onClick={() => setHours(q)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${hours === q ? 'bg-blue-500 text-white shadow-md' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                    >
+                      {formatDuration(q)}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Fine-tune in 30-minute steps */}
+                <div className="flex items-center space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => adjustHours(-0.5)}
+                    className="w-11 h-11 shrink-0 flex items-center justify-center rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xl font-bold transition"
+                  >
+                    −
+                  </button>
+                  <div className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white text-lg text-center font-bold">
+                    {formatDuration(hours)}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => adjustHours(0.5)}
+                    className="w-11 h-11 shrink-0 flex items-center justify-center rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xl font-bold transition"
+                  >
+                    +
+                  </button>
+                </div>
+
+                <p className="text-xs text-slate-400 flex justify-between">
                   <span>Additional billing:</span> 
-                  <span className="text-yellow-400 font-bold text-sm">+{formatCurrency(hours * tierInfo.rate)}</span>
+                  <span className="text-yellow-400 font-bold text-sm">+{formatCurrency(calculateBlockCost(hours, tierInfo))}</span>
                 </p>
               </div>
               
@@ -1350,9 +1406,15 @@
       );
     }
 
+    const QUICK_DURATIONS = [0.5, 1, 1.5, 2, 3, 4];
+
     function StartSessionForm({ unit, onStart, tierInfo }) {
       const [type, setType] = useState('pay-as-you-go');
       const [hours, setHours] = useState(1);
+
+      const adjustHours = (delta) => {
+        setHours(prev => Math.max(0.5, Math.round((prev + delta) * 2) / 2));
+      };
       
       return (
         <div className="p-6 space-y-5">
@@ -1375,16 +1437,45 @@
           </div>
           
           {type === 'prepaid' && (
-            <div className="animate-in">
-              <label className="text-sm font-medium text-slate-300 block mb-2">Duration (Hours)</label>
-              <input 
-                type="number" 
-                min="1" 
-                value={hours} 
-                onChange={(e) => setHours(Math.max(1, Number(e.target.value)))} 
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-yellow-400 text-lg" 
-              />
-              <p className="text-xs text-slate-400 mt-2">Estimated cost: <span className="text-yellow-400 font-bold">{formatCurrency(hours * tierInfo.rate)}</span></p>
+            <div className="animate-in space-y-3">
+              <label className="text-sm font-medium text-slate-300 block mb-2">Duration</label>
+
+              {/* Quick-select chips - includes a 30-minute option */}
+              <div className="flex flex-wrap gap-2">
+                {QUICK_DURATIONS.map(q => (
+                  <button
+                    key={q}
+                    type="button"
+                    onClick={() => setHours(q)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${hours === q ? 'bg-yellow-400 text-slate-900 shadow-md' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                  >
+                    {formatDuration(q)}
+                  </button>
+                ))}
+              </div>
+
+              {/* Fine-tune in 30-minute steps */}
+              <div className="flex items-center space-x-3">
+                <button
+                  type="button"
+                  onClick={() => adjustHours(-0.5)}
+                  className="w-11 h-11 shrink-0 flex items-center justify-center rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xl font-bold transition"
+                >
+                  −
+                </button>
+                <div className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white text-lg text-center font-bold">
+                  {formatDuration(hours)}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => adjustHours(0.5)}
+                  className="w-11 h-11 shrink-0 flex items-center justify-center rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xl font-bold transition"
+                >
+                  +
+                </button>
+              </div>
+
+              <p className="text-xs text-slate-400">Estimated cost: <span className="text-yellow-400 font-bold">{formatCurrency(calculateBlockCost(hours, tierInfo))}</span></p>
             </div>
           )}
           
@@ -1545,7 +1636,7 @@
       } else {
         const elapsedMs = now - session.startTime;
         const elapsedHours = Math.max(0, elapsedMs) / (1000 * 3600);
-        rentalTotal = Math.ceil(elapsedHours * tierInfo.rate);
+        rentalTotal = calculateBlockCost(elapsedHours, tierInfo);
       }
       const fnbTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.price * order.qty), 0);
       const fnbCostTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.cost * order.qty), 0);
@@ -1708,20 +1799,27 @@
     // --- SYSTEM SETTINGS VIEW ---
     function SystemSettings({ tiers, onUpdateTier, units, onUpdateUnitName }) {
       const [editingTier, setEditingTier] = useState(null);
-      const [editValue, setEditValue] = useState('');
+      const [editRate, setEditRate] = useState('');
+      const [editRate30, setEditRate30] = useState('');
 
       const [editingUnit, setEditingUnit] = useState(null);
       const [editUnitName, setEditUnitName] = useState('');
 
       const handleEdit = (tier) => {
         setEditingTier(tier.id);
-        setEditValue(tier.rate);
+        // Both fields are independent and fully manual - no auto math between them
+        setEditRate(tier.rate);
+        setEditRate30(tier.rate30 ?? tier.rate / 2);
       };
 
       const handleSave = (tierId) => {
-        const val = parseInt(editValue, 10);
-        if (!isNaN(val) && val >= 0) {
-          onUpdateTier(tierId, val);
+        const rate = parseInt(editRate, 10);
+        const rate30 = parseInt(editRate30, 10);
+        const newRates = {};
+        if (!isNaN(rate) && rate >= 0) newRates.rate = rate;
+        if (!isNaN(rate30) && rate30 >= 0) newRates.rate30 = rate30;
+        if (Object.keys(newRates).length > 0) {
+          onUpdateTier(tierId, newRates);
         }
         setEditingTier(null);
       };
@@ -1749,7 +1847,7 @@
             <div className="p-5 border-b border-slate-800 bg-slate-950 flex justify-between items-center">
               <h3 className="font-bold text-white text-lg flex items-center">
                 <Monitor size={18} className="mr-2 text-yellow-400" />
-                PlayStation Hourly Rates (Tiers)
+                PlayStation Rates (Tiers)
               </h3>
             </div>
             <div className="p-0">
@@ -1758,7 +1856,7 @@
                   <tr>
                     <th className="px-6 py-4 font-medium">Tier ID</th>
                     <th className="px-6 py-4 font-medium">Display Name</th>
-                    <th className="px-6 py-4 font-medium">Hourly Rate</th>
+                    <th className="px-6 py-4 font-medium">Rate (per jam &amp; per 30 menit)</th>
                     <th className="px-6 py-4 font-medium text-right">Actions</th>
                   </tr>
                 </thead>
@@ -1769,18 +1867,40 @@
                       <td className="px-6 py-4 font-medium text-white">{tier.name}</td>
                       <td className="px-6 py-4">
                         {editingTier === tier.id ? (
-                          <div className="flex items-center max-w-[150px]">
-                            <span className="text-slate-400 mr-2">Rp</span>
-                            <input
-                              type="number"
-                              value={editValue}
-                              onChange={(e) => setEditValue(e.target.value)}
-                              className="w-full bg-slate-950 border border-slate-600 rounded px-2 py-1 text-white focus:outline-none focus:border-yellow-400 text-sm"
-                              autoFocus
-                            />
+                          <div className="space-y-2">
+                            <div className="flex items-center max-w-[180px]">
+                              <span className="text-slate-400 mr-2 text-xs w-14 shrink-0">/ Jam</span>
+                              <span className="text-slate-500 mr-1 text-sm">Rp</span>
+                              <input
+                                type="number"
+                                value={editRate}
+                                onChange={(e) => setEditRate(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-600 rounded px-2 py-1 text-white focus:outline-none focus:border-yellow-400 text-sm"
+                                autoFocus
+                              />
+                            </div>
+                            <div className="flex items-center max-w-[180px]">
+                              <span className="text-slate-400 mr-2 text-xs w-14 shrink-0">/ 30m</span>
+                              <span className="text-slate-500 mr-1 text-sm">Rp</span>
+                              <input
+                                type="number"
+                                value={editRate30}
+                                onChange={(e) => setEditRate30(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-600 rounded px-2 py-1 text-white focus:outline-none focus:border-yellow-400 text-sm"
+                              />
+                            </div>
                           </div>
                         ) : (
-                          <span className="text-yellow-400 font-bold">{formatCurrency(tier.rate)}</span>
+                          <div className="space-y-0.5">
+                            <div>
+                              <span className="text-yellow-400 font-bold">{formatCurrency(tier.rate)}</span>
+                              <span className="text-slate-500 text-xs ml-1">/ jam</span>
+                            </div>
+                            <div>
+                              <span className="text-yellow-400 font-bold">{formatCurrency(tier.rate30 ?? tier.rate / 2)}</span>
+                              <span className="text-slate-500 text-xs ml-1">/ 30 menit</span>
+                            </div>
+                          </div>
                         )}
                       </td>
                       <td className="px-6 py-4 text-right">
