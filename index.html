@@ -63,7 +63,8 @@
       Monitor, Coffee, BarChart3, Settings, Play, Square, ShoppingCart, 
       Plus, Minus, AlertTriangle, Clock, LogOut, UserCircle, CreditCard, 
       Banknote, Check, X, Edit2, Save, Zap, Ban, Trash2, Timer,
-      ChevronLeft, ChevronRight, Calendar, Search, Printer, Download, Image, FileText
+      ChevronLeft, ChevronRight, Calendar, Search, Printer, Download, Image, FileText,
+      Users, Star, Award, Gift, Phone, Sparkles
     } from 'https://esm.sh/lucide-react@0.292.0';
 
     // --- INITIAL DATA SEEDING ---
@@ -94,6 +95,55 @@
       { id: 'fnb_3', name: 'French Fries', sku: 'FOOD02', category: 'Food', cost: 6000, price: 15000, stock: 15, alert: 5 },
       { id: 'fnb_4', name: 'Iced Tea', sku: 'BEV02', category: 'Drink', cost: 2000, price: 5000, stock: 50, alert: 10 },
     ];
+
+    // --- MEMBERSHIP PROGRAM CONFIG (revision v2) ---
+    // Tier is decided by the member's total spending in the last 3 months (TIER_WINDOW_DAYS).
+    const MEMBER_TIERS = {
+      rookie: { id: 'rookie', name: 'Rookie', minSpend: 0, cashbackPercent: 5 },
+      pro: { id: 'pro', name: 'Pro Gamer', minSpend: 500000, cashbackPercent: 8 },
+      legend: { id: 'legend', name: 'Legend', minSpend: 1500000, cashbackPercent: 10 },
+    };
+    const POINT_VALUE_RUPIAH = 100;      // 1 point = Rp100 (earning AND redeeming)
+    const WELCOME_BONUS_POINTS = 15;     // free points on registration
+    const POINT_EXPIRY_DAYS = 60;        // balance resets to 0 after 60 days without any transaction
+    const MAX_REDEEM_PERCENT = 50;       // points may cover at most 50% of one bill
+    const TIER_WINDOW_DAYS = 90;         // "3 bulan terakhir"
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const DEFAULT_PROMO = { active: false, multiplier: 2 };
+
+    // Highest tier whose spending threshold is met.
+    const computeMemberTier = (spend) => {
+      const sorted = Object.values(MEMBER_TIERS).sort((a, b) => b.minSpend - a.minSpend);
+      return sorted.find(t => spend >= t.minSpend) || MEMBER_TIERS.rookie;
+    };
+
+    // Sum of everything this member paid (all transactions) within the last 90 days.
+    const getMemberSpend3Months = (memberId, transactions, nowTs) => {
+      const since = nowTs - TIER_WINDOW_DAYS * DAY_MS;
+      return transactions
+        .filter(t => t.memberId === memberId && t.timestamp >= since)
+        .reduce((sum, t) => sum + (t.grandTotal || 0), 0);
+    };
+
+    // Points expire when there has been no transaction for 60 days in a row.
+    const getLastActivity = (member) => member.lastTransactionAt || member.joinedAt || 0;
+    const isPointsExpired = (member, nowTs) => nowTs - getLastActivity(member) > POINT_EXPIRY_DAYS * DAY_MS;
+    const getPointsExpiryDate = (member) => new Date(getLastActivity(member) + POINT_EXPIRY_DAYS * DAY_MS);
+    const getEffectivePoints = (member, nowTs) => (member && !isPointsExpired(member, nowTs)) ? (member.points || 0) : 0;
+
+    // points = (rentalRupiah / 100) x cashback% x multiplier   (rental only - F&B never earns points)
+    const calculateEarnedPoints = (rentalAmount, tierId, multiplier = 1) => {
+      const tier = MEMBER_TIERS[tierId] || MEMBER_TIERS.rookie;
+      if (!rentalAmount || rentalAmount <= 0) return 0;
+      const m = multiplier > 0 ? multiplier : 1;
+      return Math.floor((rentalAmount * tier.cashbackPercent * m) / (POINT_VALUE_RUPIAH * 100) + 1e-9);
+    };
+
+    // Max points usable on a bill: limited by balance AND by 50% of the bill.
+    const getMaxRedeemablePoints = (billTotal, availablePoints) => {
+      const cap = Math.floor((billTotal * MAX_REDEEM_PERCENT / 100) / POINT_VALUE_RUPIAH);
+      return Math.max(0, Math.min(availablePoints, cap));
+    };
 
     // --- UTILITY FUNCTIONS ---
     const formatCurrency = (amount) => {
@@ -135,6 +185,55 @@
       return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     };
 
+    // Shared pure calculation used by BOTH the live Checkout preview and the final handleCheckout,
+    // so the number the cashier sees is guaranteed to match what actually gets charged/saved.
+    const computeCheckoutBreakdown = (session, tier, member, pointsToRedeemInput, nowTs, promo) => {
+      let rentalTotal = 0;
+      let hoursPlayed = 0;
+      if (session.type === 'prepaid') {
+        rentalTotal = session.prePaidAmount;
+        hoursPlayed = Math.max(0, (session.endTime - session.startTime)) / (1000 * 3600);
+      } else {
+        hoursPlayed = Math.max(0, nowTs - session.startTime) / (1000 * 3600);
+        rentalTotal = calculateContinuousCost(hoursPlayed, tier);
+      }
+
+      const fnbTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.price * order.qty), 0);
+      const fnbCostTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.cost * order.qty), 0);
+      const subtotal = rentalTotal + fnbTotal;
+
+      // Redemption: no minimum, capped at 50% of the whole bill and at the (non-expired) balance.
+      const availablePoints = getEffectivePoints(member, nowTs);
+      const maxRedeemablePoints = member ? getMaxRedeemablePoints(subtotal, availablePoints) : 0;
+      const actualPointsRedeemed = member ? Math.max(0, Math.min(pointsToRedeemInput || 0, maxRedeemablePoints)) : 0;
+      const pointsDiscount = actualPointsRedeemed * POINT_VALUE_RUPIAH;
+      const grandTotal = Math.max(0, subtotal - pointsDiscount);
+
+      // Earning: only on the rupiah actually paid for the rental.
+      // The points discount is spread proportionally over rental and F&B.
+      const rentalPaid = subtotal > 0 ? Math.max(0, rentalTotal - pointsDiscount * (rentalTotal / subtotal)) : 0;
+      const appliedMultiplier = (promo && promo.active && promo.multiplier > 0) ? promo.multiplier : 1;
+      const projectedEarnedPoints = member ? calculateEarnedPoints(rentalPaid, member.tier, appliedMultiplier) : 0;
+
+      return {
+        rentalTotalBeforeDiscount: rentalTotal, memberDiscountAmount: 0, rentalTotal,
+        fnbTotal, fnbCostTotal, subtotal,
+        availablePoints, maxRedeemablePoints, actualPointsRedeemed, pointsDiscount, grandTotal,
+        rentalPaid, appliedMultiplier,
+        hoursPlayed, projectedEarnedPoints,
+      };
+    };
+
+    // Instant walk-in F&B sale: points can be redeemed (50% cap) but F&B never earns points.
+    const computeWalkInBreakdown = (fnbTotal, member, pointsToRedeemInput, nowTs) => {
+      const availablePoints = getEffectivePoints(member, nowTs);
+      const maxRedeemablePoints = member ? getMaxRedeemablePoints(fnbTotal, availablePoints) : 0;
+      const actualPointsRedeemed = member ? Math.max(0, Math.min(pointsToRedeemInput || 0, maxRedeemablePoints)) : 0;
+      const pointsDiscount = actualPointsRedeemed * POINT_VALUE_RUPIAH;
+      const grandTotal = Math.max(0, fnbTotal - pointsDiscount);
+      return { availablePoints, maxRedeemablePoints, actualPointsRedeemed, pointsDiscount, grandTotal, projectedEarnedPoints: 0 };
+    };
+
     // --- MAIN APPLICATION COMPONENT ---
     function SkyzoneHub() {
       // --- STATE MANAGEMENT ---
@@ -162,6 +261,32 @@
         return saved ? JSON.parse(saved) : [];
       });
 
+      const [members, setMembers] = useState(() => {
+        const saved = localStorage.getItem('skyzone_members');
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      // Point ledger: every earn / redeem / welcome bonus / expiry is recorded here.
+      const [pointLogs, setPointLogs] = useState(() => {
+        const saved = localStorage.getItem('skyzone_point_logs');
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      // Audit trail: every cancelled session is recorded here (cannot be edited or deleted from the UI).
+      const [cancelLogs, setCancelLogs] = useState(() => {
+        const saved = localStorage.getItem('skyzone_cancel_logs');
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      // Transaction waiting for admin PIN before it may be deleted.
+      const [deleteTrxPending, setDeleteTrxPending] = useState(null);
+
+      // Cashier-controlled Happy Hour / point multiplier.
+      const [promo, setPromo] = useState(() => {
+        const saved = localStorage.getItem('skyzone_promo');
+        return saved ? JSON.parse(saved) : DEFAULT_PROMO;
+      });
+
       // Modals State
       const [sessionModalUnit, setSessionModalUnit] = useState(null);
       const [extendModalUnit, setExtendModalUnit] = useState(null);
@@ -179,6 +304,12 @@
       // Search State for F&B Tab
       const [fnbSearchTerm, setFnbSearchTerm] = useState('');
 
+      // Membership Program State
+      const [addMemberModal, setAddMemberModal] = useState(false);
+      const [memberSearchTerm, setMemberSearchTerm] = useState('');
+      const [deleteMemberConfirm, setDeleteMemberConfirm] = useState(null);
+      const [pointLogMember, setPointLogMember] = useState(null);
+
       // --- EFFECTS ---
       useEffect(() => {
         const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -191,10 +322,39 @@
         localStorage.setItem('skyzone_units', JSON.stringify(units));
         localStorage.setItem('skyzone_inventory', JSON.stringify(inventory));
         localStorage.setItem('skyzone_transactions', JSON.stringify(transactions));
-      }, [tiers, units, inventory, transactions]);
+        localStorage.setItem('skyzone_members', JSON.stringify(members));
+        localStorage.setItem('skyzone_point_logs', JSON.stringify(pointLogs));
+        localStorage.setItem('skyzone_promo', JSON.stringify(promo));
+        localStorage.setItem('skyzone_cancel_logs', JSON.stringify(cancelLogs));
+      }, [tiers, units, inventory, transactions, members, pointLogs, promo, cancelLogs]);
+
+      // Keeps member tiers and point expiry up to date automatically:
+      // re-evaluated whenever transactions/members change and at least once an hour.
+      const refreshHourBucket = Math.floor(now / 3600000);
+      useEffect(() => {
+        const ts = Date.now();
+        const newLogs = [];
+        let changed = false;
+        const next = members.map(m => {
+          let updated = m;
+          const tierId = computeMemberTier(getMemberSpend3Months(m.id, transactions, ts)).id;
+          if (tierId !== m.tier) updated = { ...updated, tier: tierId };
+          if ((m.points || 0) > 0 && isPointsExpired(m, ts)) {
+            newLogs.push({
+              id: `plog_${ts}_${m.id}`, memberId: m.id, type: 'expire', points: -(m.points || 0),
+              balanceAfter: 0, trxId: null, note: `Poin hangus (tidak ada transaksi ${POINT_EXPIRY_DAYS} hari)`, timestamp: ts,
+            });
+            updated = { ...updated, points: 0 };
+          }
+          if (updated !== m) changed = true;
+          return updated;
+        });
+        if (changed) setMembers(next);
+        if (newLogs.length > 0) setPointLogs(prev => [...newLogs, ...prev]);
+      }, [transactions, members, refreshHourBucket]);
 
       // --- ACTIONS ---
-      const handleStartSession = (unitId, type, durationHours = 0) => {
+      const handleStartSession = (unitId, type, durationHours = 0, memberId = null) => {
         const unit = units.find(u => u.id === unitId);
         const tier = tiers[unit.tier];
         const startTime = Date.now();
@@ -213,7 +373,8 @@
           endTime,
           prePaidAmount,
           fnbOrders: [],
-          note: '' // Initial empty note
+          note: '', // Initial empty note
+          memberId: memberId || null,
         };
 
         setUnits(units.map(u => u.id === unitId ? { ...u, status: 'active', activeSession: session } : u));
@@ -255,7 +416,7 @@
         }));
       };
 
-      const handleAddFnB = (unitId, items) => {
+      const handleAddFnB = (unitId, items, memberId = null, pointsToRedeem = 0) => {
         if (items.length === 0) return;
         const updatedInventory = [...inventory];
 
@@ -269,21 +430,41 @@
         if (unitId === 'walk-in') {
           const fnbTotal = items.reduce((sum, order) => sum + (order.item.price * order.qty), 0);
           const fnbCostTotal = items.reduce((sum, order) => sum + (order.item.cost * order.qty), 0);
-          
+
+          const member = memberId ? members.find(m => m.id === memberId) : null;
+          const walkInBreakdown = computeWalkInBreakdown(fnbTotal, member, pointsToRedeem, Date.now());
+
           const newTransaction = {
             id: `trx_${Date.now()}`,
             type: 'walk-in',
             fnbTotal,
             fnbCostTotal,
             rentalTotal: 0,
-            grandTotal: fnbTotal,
+            grandTotal: walkInBreakdown.grandTotal,
             paymentMethod: 'Cash', 
             timestamp: Date.now(),
             items: items,
-            note: ''
+            note: '',
+            memberId: member ? member.id : null,
+            memberName: member ? member.name : null,
+            memberTierAtSale: member ? member.tier : null,
+            pointsRedeemed: walkInBreakdown.actualPointsRedeemed,
+            pointsDiscount: walkInBreakdown.pointsDiscount,
+            pointsEarned: walkInBreakdown.projectedEarnedPoints,
+            memberPointsBalanceAfter: member ? Math.max(0, walkInBreakdown.availablePoints - walkInBreakdown.actualPointsRedeemed + walkInBreakdown.projectedEarnedPoints) : null,
+            promoMultiplier: 1,
           };
           setTransactions([newTransaction, ...transactions]);
           setWalkInModal(false);
+
+          if (member) {
+            handleMemberTransactionUpdate(member.id, {
+              hoursPlayed: 0,
+              earnedPoints: walkInBreakdown.projectedEarnedPoints,
+              pointsRedeemed: walkInBreakdown.actualPointsRedeemed,
+              trx: newTransaction,
+            });
+          }
         } else {
           setUnits(units.map(u => {
             if (u.id === unitId && u.activeSession) {
@@ -361,25 +542,15 @@
         setDeleteFnbConfirm(null);
       };
 
-      const handleCheckout = (unitId, paymentMethod) => {
+      const handleCheckout = (unitId, paymentMethod, pointsToRedeem = 0) => {
         const unit = units.find(u => u.id === unitId);
         if (!unit || !unit.activeSession) return;
 
         const session = unit.activeSession;
         const tier = tiers[unit.tier];
-        
-        let rentalTotal = 0;
-        if (session.type === 'prepaid') {
-          rentalTotal = session.prePaidAmount;
-        } else {
-          const elapsedMs = now - session.startTime;
-          const elapsedHours = Math.max(0, elapsedMs) / (1000 * 3600);
-          rentalTotal = calculateContinuousCost(elapsedHours, tier);
-        }
+        const member = session.memberId ? members.find(m => m.id === session.memberId) : null;
 
-        const fnbTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.price * order.qty), 0);
-        const fnbCostTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.cost * order.qty), 0);
-        const grandTotal = rentalTotal + fnbTotal;
+        const breakdown = computeCheckoutBreakdown(session, tier, member, pointsToRedeem, now, promo);
 
         const newTransaction = {
           id: `trx_${Date.now()}`,
@@ -387,20 +558,40 @@
           unit_id: unit.id,
           unit_name: unit.name,
           type: 'rental',
-          rentalTotal,
-          fnbTotal,
-          fnbCostTotal,
-          grandTotal,
+          rentalTotal: breakdown.rentalTotal,
+          rentalTotalBeforeDiscount: breakdown.rentalTotalBeforeDiscount,
+          fnbTotal: breakdown.fnbTotal,
+          fnbCostTotal: breakdown.fnbCostTotal,
+          grandTotal: breakdown.grandTotal,
           paymentMethod,
           timestamp: Date.now(),
           fnbOrders: session.fnbOrders,
-          note: session.note || '' // Persist note to financial transaction log
+          note: session.note || '', // Persist note to financial transaction log
+          memberId: member ? member.id : null,
+          memberName: member ? member.name : null,
+          memberTierAtSale: member ? member.tier : null,
+          memberDiscountAmount: breakdown.memberDiscountAmount,
+          pointsRedeemed: breakdown.actualPointsRedeemed,
+          pointsDiscount: breakdown.pointsDiscount,
+          pointsEarned: breakdown.projectedEarnedPoints,
+          memberPointsBalanceAfter: member ? Math.max(0, breakdown.availablePoints - breakdown.actualPointsRedeemed + breakdown.projectedEarnedPoints) : null,
+          promoMultiplier: member ? breakdown.appliedMultiplier : 1,
         };
 
         setTransactions([newTransaction, ...transactions]);
         setUnits(units.map(u => u.id === unitId ? { ...u, status: 'idle', activeSession: null } : u));
         setCheckoutModalUnit(null);
         setReceiptTrx(newTransaction);
+
+        if (member) {
+          handleMemberTransactionUpdate(member.id, {
+            hoursPlayed: breakdown.hoursPlayed,
+            earnedPoints: breakdown.projectedEarnedPoints,
+            pointsRedeemed: breakdown.actualPointsRedeemed,
+            trx: newTransaction,
+            multiplier: breakdown.appliedMultiplier,
+          });
+        }
       };
 
       const handleAddConsole = (newUnit) => {
@@ -415,9 +606,111 @@
         });
       };
 
+      // --- MEMBERSHIP PROGRAM ACTIONS ---
+      const handleAddMember = (name, phone) => {
+        const ts = Date.now();
+        const memberId = `mem_${ts}`;
+        const newMember = {
+          id: memberId,
+          name: name.trim(),
+          phone: phone.trim(),
+          tier: 'rookie',
+          points: WELCOME_BONUS_POINTS,
+          lifetimeHours: 0,
+          joinedAt: ts,
+          lastTransactionAt: ts,
+        };
+        setMembers(prev => [newMember, ...prev]);
+        setPointLogs(prev => [{
+          id: `plog_${ts}`, memberId, type: 'welcome', points: WELCOME_BONUS_POINTS,
+          balanceAfter: WELCOME_BONUS_POINTS, trxId: null, note: 'Welcome bonus registrasi', timestamp: ts,
+        }, ...prev]);
+        setAddMemberModal(false);
+      };
+
+      const handleDeleteMember = (memberId) => {
+        setMembers(prev => prev.filter(m => m.id !== memberId));
+        setPointLogs(prev => prev.filter(l => l.memberId !== memberId));
+        setDeleteMemberConfirm(null);
+      };
+
+      // Applies a paid transaction to a member:
+      // (1) expire stale points, (2) deduct redeemed points, (3) add earned points (x promo multiplier already applied),
+      // (4) refresh last-activity date, (5) re-check tier using spending of the last 90 days incl. this transaction.
+      // Balance can never go negative. Every movement is written to the point log.
+      const handleMemberTransactionUpdate = (memberId, { hoursPlayed = 0, earnedPoints = 0, pointsRedeemed = 0, trx, multiplier = 1 }) => {
+        const m = members.find(x => x.id === memberId);
+        if (!m) return;
+        const ts = Date.now();
+        const logs = [];
+        let balance = m.points || 0;
+
+        if (balance > 0 && isPointsExpired(m, ts)) {
+          logs.push({ id: `plog_${ts}_exp`, memberId, type: 'expire', points: -balance, balanceAfter: 0, trxId: null,
+            note: `Poin hangus (tidak ada transaksi ${POINT_EXPIRY_DAYS} hari)`, timestamp: ts });
+          balance = 0;
+        }
+        if (pointsRedeemed > 0) {
+          balance = Math.max(0, balance - pointsRedeemed);
+          logs.push({ id: `plog_${ts}_red`, memberId, type: 'redeem', points: -pointsRedeemed, balanceAfter: balance,
+            trxId: trx ? trx.id : null, note: `Tukar poin = potongan ${formatCurrency(pointsRedeemed * POINT_VALUE_RUPIAH)}`, timestamp: ts });
+        }
+        if (earnedPoints > 0) {
+          balance += earnedPoints;
+          logs.push({ id: `plog_${ts}_earn`, memberId, type: 'earn', points: earnedPoints, balanceAfter: balance,
+            trxId: trx ? trx.id : null, note: multiplier > 1 ? `Poin sewa (Happy Hour ${multiplier}x)` : 'Poin sewa', timestamp: ts });
+        }
+
+        const spend = getMemberSpend3Months(memberId, trx ? [trx, ...transactions] : transactions, ts);
+        const newTierId = computeMemberTier(spend).id;
+
+        setMembers(prev => prev.map(x => x.id !== memberId ? x : {
+          ...x,
+          points: balance,
+          tier: newTierId,
+          lastTransactionAt: ts,
+          lifetimeHours: (x.lifetimeHours || 0) + hoursPlayed,
+        }));
+        if (logs.length > 0) setPointLogs(prev => [...logs.reverse(), ...prev]);
+      };
+
+      // --- PROMO / HAPPY HOUR (cashier control) ---
+      const handleTogglePromo = () => setPromo(p => ({ ...p, active: !p.active }));
+      const handleSetPromoMultiplier = (value) => {
+        const v = Math.min(10, Math.max(1, Number(value) || 1));
+        setPromo(p => ({ ...p, multiplier: v }));
+      };
+
       const handleCancelSession = (unitId) => {
         const unit = units.find(u => u.id === unitId);
         if (!unit || !unit.activeSession) return;
+
+        // --- AUDIT LOG: record what this session WOULD have billed, so cancelled money is never invisible ---
+        const session = unit.activeSession;
+        const ts = Date.now();
+        const member = session.memberId ? members.find(m => m.id === session.memberId) : null;
+        const bill = computeCheckoutBreakdown(session, tiers[unit.tier], null, 0, ts, null);
+        const elapsedMinutes = Math.max(0, Math.round((ts - session.startTime) / 60000));
+        const bookedMinutes = session.type === 'prepaid' ? Math.round((session.endTime - session.startTime) / 60000) : null;
+        setCancelLogs(prev => [{
+          id: `cancel_${ts}`,
+          timestamp: ts,
+          unitId: unit.id,
+          unitName: unit.name,
+          tierName: tiers[unit.tier] ? tiers[unit.tier].name : '',
+          sessionType: session.type,
+          startTime: session.startTime,
+          elapsedMinutes,
+          bookedMinutes,
+          prepaidTimeFinished: session.type === 'prepaid' && ts >= session.endTime,
+          rentalAmount: bill.rentalTotal,
+          fnbAmount: bill.fnbTotal,
+          expectedTotal: bill.subtotal,
+          fnbOrders: session.fnbOrders.map(o => ({ name: o.item.name, qty: o.qty, price: o.item.price })),
+          memberName: member ? member.name : null,
+          note: session.note || '',
+          cancelledByRole: role,
+        }, ...prev]);
         
         // Restore FnB stock if any was ordered but cancelled
         if (unit.activeSession.fnbOrders.length > 0) {
@@ -513,6 +806,7 @@
             <nav className="flex-1 space-y-2">
               <SidebarItem icon={Monitor} label="Live Monitoring" id="monitoring" />
               <SidebarItem icon={Coffee} label="FnB & Inventory" id="fnb" />
+              <SidebarItem icon={Users} label="Members" id="members" />
               <SidebarItem icon={BarChart3} label="Financial Reports" id="reports" restricted={true} />
               {role === 'admin' && <SidebarItem icon={Settings} label="System Settings" id="settings" restricted={true} />}
             </nav>
@@ -555,6 +849,7 @@
             {/* --- VIEW: LIVE MONITORING --- */}
             {activeTab === 'monitoring' && (
               <div className="space-y-6 animate-in">
+                <PromoControl promo={promo} onToggle={handleTogglePromo} onSetMultiplier={handleSetPromoMultiplier} />
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div>
                     <h2 className="text-2xl font-bold text-white">Live Monitoring Matrix</h2>
@@ -845,12 +1140,26 @@
               </div>
             )}
 
+            {/* --- VIEW: MEMBERSHIP PROGRAM --- */}
+            {activeTab === 'members' && (
+              <MembersView
+                members={members}
+                transactions={transactions}
+                onViewLog={(member) => setPointLogMember(member)}
+                searchTerm={memberSearchTerm}
+                onSearchChange={setMemberSearchTerm}
+                onAddMember={() => setAddMemberModal(true)}
+                onDeleteMember={(member) => setDeleteMemberConfirm(member)}
+              />
+            )}
+
             {/* --- VIEW: FINANCIAL REPORTS --- */}
             {activeTab === 'reports' && role === 'admin' && (
               <DashboardAnalytics 
                 transactions={transactions} 
                 inventory={inventory} 
-                onDeleteTransaction={handleDeleteTransaction}
+                cancelLogs={cancelLogs}
+                onDeleteTransaction={(trxId) => setDeleteTrxPending(trxId)}
                 onViewReceipt={setReceiptTrx}
               />
             )}
@@ -886,6 +1195,7 @@
                   unit={sessionModalUnit} 
                   onStart={handleStartSession} 
                   tierInfo={tiers[sessionModalUnit.tier]}
+                  members={members}
                 />
               </div>
             </div>
@@ -907,8 +1217,10 @@
               isOpen={!!fnbModalUnit || walkInModal}
               unit={fnbModalUnit}
               inventory={inventory}
+              isWalkIn={walkInModal}
+              members={members}
               onClose={() => { setFnbModalUnit(null); setWalkInModal(false); }}
-              onAdd={(items) => handleAddFnB(fnbModalUnit ? fnbModalUnit.id : 'walk-in', items)}
+              onAdd={(items, memberId, pointsToRedeem) => handleAddFnB(fnbModalUnit ? fnbModalUnit.id : 'walk-in', items, memberId, pointsToRedeem)}
             />
           )}
 
@@ -922,8 +1234,10 @@
                 unit={liveCheckoutUnit}
                 tierInfo={tiers[liveCheckoutUnit.tier]}
                 now={now}
+                members={members}
+                promo={promo}
                 onClose={() => setCheckoutModalUnit(null)}
-                onConfirm={(method) => handleCheckout(liveCheckoutUnit.id, method)}
+                onConfirm={(method, pointsToRedeem) => handleCheckout(liveCheckoutUnit.id, method, pointsToRedeem)}
                 onRemoveFnbOrder={(orderIndex) => handleRemoveFnbOrder(liveCheckoutUnit.id, orderIndex)}
               />
             );
@@ -984,6 +1298,76 @@
             </div>
           )}
 
+          {/* Add Member Modal */}
+          {addMemberModal && (
+            <AddMemberModal
+              onClose={() => setAddMemberModal(false)}
+              onAdd={handleAddMember}
+            />
+          )}
+
+          {/* Member Point Log Modal */}
+          {pointLogMember && (
+            <PointLogModal
+              member={members.find(m => m.id === pointLogMember.id) || pointLogMember}
+              logs={pointLogs.filter(l => l.memberId === pointLogMember.id)}
+              onClose={() => setPointLogMember(null)}
+            />
+          )}
+
+          {/* Delete Member Confirmation Modal */}
+          {deleteMemberConfirm && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in">
+                <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+                  <h3 className="font-bold text-white flex items-center text-lg">
+                    <AlertTriangle size={18} className="mr-2 text-red-500 animate-pulse" /> Confirm Delete
+                  </h3>
+                  <button onClick={() => setDeleteMemberConfirm(null)} className="text-slate-400 hover:text-white">
+                    <X size={20} />
+                  </button>
+                </div>
+                <div className="p-6 space-y-4">
+                  <p className="text-slate-300">
+                    Hapus member <strong className="text-white">{deleteMemberConfirm.name}</strong> dari sistem? Saldo poin dan riwayat tier member ini akan ikut terhapus.
+                  </p>
+                  <p className="text-xs text-slate-500 bg-slate-950/50 p-3 rounded-lg border border-slate-800">
+                    Catatan: Transaksi lama milik member ini di laporan keuangan tidak akan ikut terhapus.
+                  </p>
+                  <div className="flex space-x-3 mt-4">
+                    <button
+                      onClick={() => setDeleteMemberConfirm(null)}
+                      className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2.5 rounded-lg text-sm font-semibold transition"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => handleDeleteMember(deleteMemberConfirm.id)}
+                      className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold transition"
+                    >
+                      Delete Member
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Admin PIN required before a transaction can be deleted */}
+          {deleteTrxPending && (() => {
+            const trx = transactions.find(t => t.id === deleteTrxPending);
+            const label = trx ? `${trx.type === 'walk-in' ? 'Walk-in F&B' : trx.unit_name} • ${formatCurrency(trx.grandTotal)}` : 'transaksi ini';
+            return (
+              <PinModal
+                correctPin={ADMIN_PIN}
+                title="PIN Admin: Hapus Transaksi"
+                description={`Masukkan PIN admin untuk menghapus ${label}. Tindakan ini tidak bisa dibatalkan.`}
+                onClose={() => setDeleteTrxPending(null)}
+                onSuccess={() => { handleDeleteTransaction(deleteTrxPending); setDeleteTrxPending(null); }}
+              />
+            );
+          })()}
+
           {/* Admin PIN Modal */}
           {pinModalOpen && (
             <PinModal
@@ -1004,7 +1388,7 @@
       );
     }
 
-    function PinModal({ correctPin, onClose, onSuccess }) {
+    function PinModal({ correctPin, onClose, onSuccess, title = 'Admin PIN Required', description = 'Enter the admin PIN to switch roles.' }) {
       const [pin, setPin] = useState('');
       const [error, setError] = useState(false);
 
@@ -1044,13 +1428,13 @@
             <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950">
               <h3 className="font-bold text-white flex items-center">
                 <UserCircle size={18} className="mr-2 text-yellow-400" />
-                Admin PIN Required
+                {title}
               </h3>
               <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20} /></button>
             </div>
 
             <div className="p-6 space-y-5">
-              <p className="text-sm text-slate-400 text-center">Enter the admin PIN to switch roles.</p>
+              <p className="text-sm text-slate-400 text-center">{description}</p>
 
               {/* PIN dots */}
               <div className="flex justify-center space-x-3">
@@ -1208,13 +1592,19 @@
                 <div className="flex justify-between text-[10px]">
                   <span>Jenis:</span><span>{trx.type === 'walk-in' ? 'Walk-in F&B' : `Sewa - ${trx.unit_name}`}</span>
                 </div>
+                {trx.memberName && (
+                  <div className="flex justify-between text-[10px]">
+                    <span>Member:</span>
+                    <span>{trx.memberName} ({(MEMBER_TIERS[trx.memberTierAtSale] || MEMBER_TIERS.rookie).name})</span>
+                  </div>
+                )}
                 <div className="border-t border-dashed border-slate-400 my-2"></div>
 
                 <div>
                   {trx.type !== 'walk-in' && (
                     <div className="flex justify-between items-start gap-2 mb-1.5" style={{ lineHeight: '1.5' }}>
                       <span>Waktu Sewa Konsol</span>
-                      <span className="whitespace-nowrap">{formatCurrency(trx.rentalTotal)}</span>
+                      <span className="whitespace-nowrap">{formatCurrency(trx.rentalTotalBeforeDiscount ?? trx.rentalTotal)}</span>
                     </div>
                   )}
                   {orderedItems && orderedItems.map((order, idx) => (
@@ -1228,6 +1618,19 @@
                   )}
                 </div>
 
+                {trx.memberDiscountAmount > 0 && (
+                  <div className="flex justify-between items-start gap-2 mb-1.5" style={{ lineHeight: '1.5' }}>
+                    <span>Diskon Member</span>
+                    <span className="whitespace-nowrap">-{formatCurrency(trx.memberDiscountAmount)}</span>
+                  </div>
+                )}
+                {trx.pointsDiscount > 0 && (
+                  <div className="flex justify-between items-start gap-2 mb-1.5" style={{ lineHeight: '1.5' }}>
+                    <span>Poin Dipakai ({trx.pointsRedeemed})</span>
+                    <span className="whitespace-nowrap">-{formatCurrency(trx.pointsDiscount)}</span>
+                  </div>
+                )}
+
                 <div className="border-t border-dashed border-slate-400 my-2"></div>
                 <div className="flex justify-between font-bold text-sm">
                   <span>TOTAL</span>
@@ -1240,6 +1643,22 @@
                 {trx.note && (
                   <div className="mt-2 text-[10px] italic border-t border-dashed border-slate-400 pt-2">
                     Catatan: {trx.note}
+                  </div>
+                )}
+
+                {trx.memberName && (
+                  <div className="mt-2 text-[10px] border-t border-dashed border-slate-400 pt-2">
+                    {trx.promoMultiplier > 1 && (
+                      <div className="font-bold">Promo Happy Hour Active: {trx.promoMultiplier}x Point</div>
+                    )}
+                    <div className="flex justify-between">
+                      <span>Poin Didapat:</span>
+                      <span>+{trx.pointsEarned || 0}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Sisa Poin:</span>
+                      <span>{(trx.memberPointsBalanceAfter ?? 0).toLocaleString('id-ID')}</span>
+                    </div>
                   </div>
                 )}
 
@@ -1448,9 +1867,91 @@
 
     const QUICK_DURATIONS = [0.5, 1, 1.5, 2, 3, 4];
 
-    function StartSessionForm({ unit, onStart, tierInfo }) {
+    // Reusable search-and-select for attaching a member to a rental session or walk-in sale.
+    function MemberPicker({ members, selectedMemberId, onSelect }) {
+      const [query, setQuery] = useState('');
+      const [open, setOpen] = useState(false);
+
+      const selectedMember = members.find(m => m.id === selectedMemberId);
+
+      const results = query.trim() === '' ? members.slice(0, 20) : members.filter(m =>
+        m.name.toLowerCase().includes(query.toLowerCase()) || m.phone.includes(query)
+      );
+
+      if (selectedMember) {
+        const tierInfo = MEMBER_TIERS[selectedMember.tier];
+        return (
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-3 flex items-center justify-between">
+            <div className="flex items-center min-w-0">
+              <div className="w-9 h-9 rounded-full bg-blue-500/20 flex items-center justify-center mr-3 shrink-0">
+                <UserCircle size={18} className="text-blue-300" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-white font-bold text-sm truncate">{selectedMember.name}</div>
+                <div className="text-[11px] text-blue-300 flex items-center">
+                  <Award size={11} className="mr-1" /> {tierInfo.name} • {getEffectivePoints(selectedMember, Date.now()).toLocaleString('id-ID')} poin
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onSelect(null)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition shrink-0"
+              title="Lepas member"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        );
+      }
+
+      return (
+        <div className="relative">
+          <div className="relative">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <Search size={14} className="text-slate-500" />
+            </div>
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+              onFocus={() => setOpen(true)}
+              placeholder="Cari member: nama / no. HP..."
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-8 pr-3 py-2.5 text-white text-sm focus:outline-none focus:border-blue-400 transition"
+            />
+          </div>
+          {open && (
+            <div className="absolute z-10 mt-1 w-full bg-slate-800 border border-slate-700 rounded-lg shadow-xl max-h-52 overflow-y-auto">
+              {results.length === 0 && (
+                <div className="p-3 text-xs text-slate-500 text-center">Member tidak ditemukan.</div>
+              )}
+              {results.map(m => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => { onSelect(m.id); setOpen(false); setQuery(''); }}
+                  className="w-full text-left px-3 py-2.5 hover:bg-slate-700 transition flex items-center justify-between text-sm border-b border-slate-700/50 last:border-0"
+                >
+                  <div>
+                    <div className="text-white font-medium">{m.name}</div>
+                    <div className="text-[11px] text-slate-500">{m.phone}</div>
+                  </div>
+                  <span className="text-[10px] font-bold text-blue-300 bg-blue-500/10 px-2 py-0.5 rounded">{MEMBER_TIERS[m.tier].name}</span>
+                </button>
+              ))}
+              {members.length === 0 && (
+                <div className="p-3 text-xs text-slate-500 text-center">Belum ada member terdaftar.</div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function StartSessionForm({ unit, onStart, tierInfo, members }) {
       const [type, setType] = useState('pay-as-you-go');
       const [hours, setHours] = useState(1);
+      const [selectedMemberId, setSelectedMemberId] = useState(null);
 
       const adjustHours = (delta) => {
         setHours(prev => Math.max(0.5, Math.round((prev + delta) * 2) / 2));
@@ -1458,6 +1959,11 @@
       
       return (
         <div className="p-6 space-y-5">
+          <div>
+            <label className="text-sm font-medium text-slate-300 block mb-2">Member (Optional)</label>
+            <MemberPicker members={members || []} selectedMemberId={selectedMemberId} onSelect={setSelectedMemberId} />
+          </div>
+
           <div>
             <label className="text-sm font-medium text-slate-300 block mb-2">Session Type</label>
             <div className="flex space-x-2">
@@ -1520,7 +2026,7 @@
           )}
           
           <button 
-            onClick={() => onStart(unit.id, type, type === 'prepaid' ? hours : 0)} 
+            onClick={() => onStart(unit.id, type, type === 'prepaid' ? hours : 0, selectedMemberId)} 
             className="w-full bg-yellow-400 text-slate-900 font-bold py-3.5 rounded-xl shadow-lg hover:bg-yellow-500 transition mt-2 flex items-center justify-center"
           >
             <Play size={18} className="mr-2 fill-current" /> Start Session Now
@@ -1529,9 +2035,11 @@
       );
     }
 
-    function AddFnbModal({ isOpen, unit, inventory, onClose, onAdd }) {
+    function AddFnbModal({ isOpen, unit, inventory, isWalkIn, members, onClose, onAdd }) {
       const [cart, setCart] = useState([]);
       const [searchQuery, setSearchQuery] = useState('');
+      const [selectedMemberId, setSelectedMemberId] = useState(null);
+      const [redeemInput, setRedeemInput] = useState('0');
       if (!isOpen) return null;
 
       const addToCart = (item) => {
@@ -1557,6 +2065,12 @@
       };
 
       const total = cart.reduce((sum, c) => sum + (c.item.price * c.qty), 0);
+
+      const selectedMember = isWalkIn && selectedMemberId ? (members || []).find(m => m.id === selectedMemberId) : null;
+      const pointsToRedeem = Math.max(0, parseInt(redeemInput, 10) || 0);
+      const walkInBreakdown = isWalkIn ? computeWalkInBreakdown(total, selectedMember, pointsToRedeem, Date.now()) : null;
+      const maxRedeemable = walkInBreakdown ? walkInBreakdown.maxRedeemablePoints : 0;
+      const selectedAvailablePoints = walkInBreakdown ? walkInBreakdown.availablePoints : 0;
       
       const filteredInventory = inventory.filter(i => 
         i.stock > 0 && 
@@ -1645,13 +2159,60 @@
                   }
                 </div>
                 
-                <div className="pt-4 mt-4">
-                  <div className="flex justify-between items-center mb-4 bg-slate-900 p-3 rounded-lg border border-slate-800">
-                    <span className="text-slate-300 font-medium">Total Bill</span>
-                    <span className="text-xl font-black text-yellow-400">{formatCurrency(total)}</span>
+                <div className="pt-4 mt-4 space-y-3">
+                  {/* Member attach + points redeem - only relevant for an instant walk-in sale */}
+                  {isWalkIn && (
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Member (Optional)</label>
+                      <MemberPicker members={members || []} selectedMemberId={selectedMemberId} onSelect={setSelectedMemberId} />
+                      {selectedMember && selectedAvailablePoints > 0 && (
+                        <div className="pt-1">
+                          <label className="text-[11px] text-slate-400 block mb-1">Gunakan Poin (saldo: {selectedAvailablePoints.toLocaleString('id-ID')} • maks. {MAX_REDEEM_PERCENT}% tagihan)</label>
+                          <div className="flex items-center space-x-2">
+                            <input
+                              type="number"
+                              min="0"
+                              max={maxRedeemable}
+                              value={redeemInput}
+                              onChange={(e) => setRedeemInput(e.target.value)}
+                              className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-green-400"
+                              placeholder="0"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setRedeemInput(String(maxRedeemable))}
+                              className="px-2.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold transition shrink-0"
+                            >
+                              Max ({maxRedeemable})
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-300 font-medium text-sm">Subtotal</span>
+                      <span className="text-white font-bold">{formatCurrency(total)}</span>
+                    </div>
+                    {isWalkIn && walkInBreakdown && walkInBreakdown.pointsDiscount > 0 && (
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-green-400">Poin Dipakai ({walkInBreakdown.actualPointsRedeemed} poin)</span>
+                        <span className="text-green-400 font-medium">-{formatCurrency(walkInBreakdown.pointsDiscount)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center pt-1.5 mt-1 border-t border-slate-800">
+                      <span className="text-slate-300 font-medium">Total Bill</span>
+                      <span className="text-xl font-black text-yellow-400">{formatCurrency(isWalkIn && walkInBreakdown ? walkInBreakdown.grandTotal : total)}</span>
+                    </div>
+                    {isWalkIn && selectedMember && (
+                      <div className="text-[11px] text-slate-500 pt-1">Pembelian F&B tidak menghasilkan poin (poin hanya dari sewa unit).</div>
+                    )}
                   </div>
+
                   <button 
-                    onClick={() => onAdd(cart)} 
+                    onClick={() => onAdd(cart, isWalkIn ? selectedMemberId : null, isWalkIn && walkInBreakdown ? walkInBreakdown.actualPointsRedeemed : 0)} 
                     disabled={cart.length === 0} 
                     className="w-full bg-yellow-400 text-slate-900 font-bold py-3.5 rounded-xl shadow-lg hover:bg-yellow-500 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
                   >
@@ -1665,22 +2226,20 @@
       )
     }
 
-    function CheckoutModal({ unit, tierInfo, now, onClose, onConfirm, onRemoveFnbOrder }) {
+    function CheckoutModal({ unit, tierInfo, now, members, promo, onClose, onConfirm, onRemoveFnbOrder }) {
       const [method, setMethod] = useState('Cash');
+      const [redeemInput, setRedeemInput] = useState('0');
       if (!unit || !unit.activeSession) return null;
 
       const session = unit.activeSession;
-      let rentalTotal = 0;
-      if (session.type === 'prepaid') {
-        rentalTotal = session.prePaidAmount;
-      } else {
-        const elapsedMs = now - session.startTime;
-        const elapsedHours = Math.max(0, elapsedMs) / (1000 * 3600);
-        rentalTotal = calculateContinuousCost(elapsedHours, tierInfo);
-      }
-      const fnbTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.price * order.qty), 0);
-      const fnbCostTotal = session.fnbOrders.reduce((sum, order) => sum + (order.item.cost * order.qty), 0);
-      const grandTotal = rentalTotal + fnbTotal;
+      const member = session.memberId ? (members || []).find(m => m.id === session.memberId) : null;
+      const memberTierInfo = member ? MEMBER_TIERS[member.tier] : null;
+
+      const pointsToRedeem = Math.max(0, parseInt(redeemInput, 10) || 0);
+      const breakdown = computeCheckoutBreakdown(session, tierInfo, member, pointsToRedeem, now, promo);
+      const { rentalTotal, fnbTotal, availablePoints, actualPointsRedeemed, pointsDiscount, grandTotal, projectedEarnedPoints, appliedMultiplier } = breakdown;
+      const maxRedeemable = breakdown.maxRedeemablePoints;
+      const promoActive = appliedMultiplier > 1;
 
       return (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1701,6 +2260,34 @@
                 </div>
               )}
 
+              {/* Member badge, if a member is attached to this session */}
+              {member && (
+                <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-3 flex items-center justify-between">
+                  <div className="flex items-center">
+                    <div className="w-9 h-9 rounded-full bg-blue-500/20 flex items-center justify-center mr-3 shrink-0">
+                      <UserCircle size={18} className="text-blue-300" />
+                    </div>
+                    <div>
+                      <div className="text-white font-bold text-sm">{member.name}</div>
+                      <div className="text-[11px] text-blue-300 flex items-center">
+                        <Award size={11} className="mr-1" /> {memberTierInfo.name} • {availablePoints.toLocaleString('id-ID')} poin
+                      </div>
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-bold bg-blue-500/20 text-blue-300 px-2 py-1 rounded-lg">
+                    Cashback {memberTierInfo.cashbackPercent}%
+                  </span>
+                </div>
+              )}
+
+              {/* Happy Hour indicator (only matters when a member earns points on this bill) */}
+              {member && promoActive && (
+                <div className="bg-gradient-to-r from-amber-500/20 to-yellow-400/10 border border-yellow-400/40 rounded-xl p-3 flex items-center text-xs text-yellow-300">
+                  <Sparkles size={14} className="mr-2 shrink-0" />
+                  <span className="font-bold">Promo Happy Hour Active: {appliedMultiplier}x Point</span>
+                </div>
+              )}
+
               {/* F&B Ordered Items List Detail */}
               <div className="space-y-2">
                 <span className="font-bold uppercase text-[10px] tracking-wider text-slate-400 block">Ordered Items Detailed list</span>
@@ -1714,7 +2301,9 @@
                         {session.type === 'prepaid' ? 'Prepaid Fixed Slot' : 'Pay As You Go'}
                       </span>
                     </div>
-                    <span className="text-slate-400">{formatCurrency(rentalTotal)}</span>
+                    <div className="text-right">
+                      <span className="text-slate-400">{formatCurrency(rentalTotal)}</span>
+                    </div>
                   </div>
 
                   {/* Dynamic orders mapping */}
@@ -1759,11 +2348,51 @@
                     <span className="text-white font-medium">{formatCurrency(fnbTotal)}</span>
                   </div>
                 )}
+                {pointsDiscount > 0 && (
+                  <div className="flex justify-between text-green-400 text-sm">
+                    <span>Poin Dipakai ({actualPointsRedeemed} poin):</span>
+                    <span className="font-medium">-{formatCurrency(pointsDiscount)}</span>
+                  </div>
+                )}
                 <div className="pt-3 mt-1 border-t border-slate-800 flex justify-between items-center text-lg font-black">
                   <span className="text-white">Grand Total:</span>
                   <span className="text-yellow-400 text-2xl">{formatCurrency(grandTotal)}</span>
                 </div>
+                {member && projectedEarnedPoints > 0 && (
+                  <div className="flex justify-between items-center text-[11px] text-slate-500 pt-1">
+                    <span className="flex items-center"><Sparkles size={11} className="mr-1 text-yellow-400" /> Poin didapat (dari sewa{promoActive ? `, ${appliedMultiplier}x` : ''}):</span>
+                    <span className="text-yellow-400 font-bold">+{projectedEarnedPoints}</span>
+                  </div>
+                )}
               </div>
+
+              {/* Redeem Points - only shown when a member with a positive balance is attached */}
+              {member && availablePoints > 0 && (
+                <div>
+                  <label className="text-sm font-medium text-slate-300 block mb-2 flex items-center">
+                    <Gift size={14} className="mr-1.5 text-green-400" /> Gunakan Poin (saldo: {availablePoints.toLocaleString('id-ID')})
+                  </label>
+                  <div className="flex items-center space-x-3">
+                    <input
+                      type="number"
+                      min="0"
+                      max={maxRedeemable}
+                      value={redeemInput}
+                      onChange={(e) => setRedeemInput(e.target.value)}
+                      className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-green-400 text-sm"
+                      placeholder="0"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setRedeemInput(String(maxRedeemable))}
+                      className="px-3 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition shrink-0"
+                    >
+                      Max ({maxRedeemable})
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1.5">1 poin = Rp{POINT_VALUE_RUPIAH} • tanpa minimum • maks. {MAX_REDEEM_PERCENT}% dari total tagihan ({maxRedeemable} poin)</p>
+                </div>
+              )}
 
               <div>
                 <label className="text-sm font-medium text-slate-300 block mb-3">Select Payment Method</label>
@@ -1784,7 +2413,7 @@
               </div>
 
               <button 
-                onClick={() => onConfirm(method)} 
+                onClick={() => onConfirm(method, actualPointsRedeemed)} 
                 className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3.5 rounded-xl shadow-lg transition flex justify-center items-center mt-2"
               >
                 <Check size={18} className="mr-2" /> Complete Payment
@@ -2043,8 +2672,324 @@
       );
     }
 
+    // --- PROMO / HAPPY HOUR CONTROL (cashier dashboard) ---
+    function PromoControl({ promo, onToggle, onSetMultiplier }) {
+      const presets = [1.5, 2, 3];
+      return (
+        <div className={`rounded-2xl border p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 transition ${promo.active ? 'bg-gradient-to-r from-amber-500/20 via-yellow-400/10 to-transparent border-yellow-400/50 shadow-lg shadow-yellow-400/10' : 'bg-slate-900 border-slate-800'}`}>
+          <div className="flex items-center">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center mr-3 shrink-0 ${promo.active ? 'bg-yellow-400 text-slate-900' : 'bg-slate-800 text-slate-500'}`}>
+              <Sparkles size={20} />
+            </div>
+            <div>
+              <div className="font-bold text-white text-sm flex items-center">
+                Happy Hour / Point Multiplier
+                <span className={`ml-2 text-[10px] font-black px-2 py-0.5 rounded-full ${promo.active ? 'bg-yellow-400 text-slate-900 animate-pulse' : 'bg-slate-800 text-slate-500'}`}>
+                  {promo.active ? `AKTIF • ${promo.multiplier}x POINT` : 'OFF'}
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-400">
+                {promo.active ? 'Poin sewa member dikali multiplier saat checkout. Muncul juga di struk member.' : 'Nyalakan agar poin sewa member dikali multiplier.'}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center flex-wrap gap-3">
+            <div className="flex items-center space-x-1.5">
+              {presets.map(p => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => onSetMultiplier(p)}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${promo.multiplier === p ? 'bg-yellow-400 text-slate-900' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                >
+                  {p}x
+                </button>
+              ))}
+              <div className="flex items-center bg-slate-950 border border-slate-700 rounded-lg px-2">
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  step="0.5"
+                  value={promo.multiplier}
+                  onChange={(e) => onSetMultiplier(e.target.value)}
+                  className="w-14 bg-transparent text-white text-sm py-1.5 focus:outline-none text-center"
+                  title="Multiplier kustom (1 - 10)"
+                />
+                <span className="text-slate-500 text-xs">x</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={onToggle}
+              role="switch"
+              aria-checked={promo.active}
+              className={`relative w-14 h-7 rounded-full transition shrink-0 ${promo.active ? 'bg-yellow-400' : 'bg-slate-700'}`}
+              title={promo.active ? 'Matikan Happy Hour' : 'Nyalakan Happy Hour'}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-white shadow transition-transform ${promo.active ? 'translate-x-7' : ''}`}></span>
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // --- MEMBERSHIP DIRECTORY VIEW ---
+    function MembersView({ members, transactions, searchTerm, onSearchChange, onAddMember, onDeleteMember, onViewLog }) {
+      const nowTs = Date.now();
+      const filteredMembers = members.filter(m =>
+        m.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        m.phone.includes(searchTerm)
+      );
+
+      const tierBadgeClasses = {
+        rookie: 'bg-slate-700 text-slate-300',
+        pro: 'bg-blue-500/20 text-blue-300',
+        legend: 'bg-yellow-400/20 text-yellow-300',
+      };
+
+      const nextTierHint = (spend) => {
+        const sorted = Object.values(MEMBER_TIERS).sort((a, b) => a.minSpend - b.minSpend);
+        const next = sorted.find(t => t.minSpend > spend);
+        return next ? `${formatCurrency(next.minSpend - spend)} lagi ke ${next.name}` : 'Tier tertinggi';
+      };
+
+      return (
+        <div className="animate-in">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-6 gap-4">
+            <div>
+              <h2 className="text-2xl font-bold text-white">Membership Directory</h2>
+              <p className="text-slate-400 text-sm">1 poin = Rp{POINT_VALUE_RUPIAH} • poin hanya dari sewa unit • hangus setelah {POINT_EXPIRY_DAYS} hari tanpa transaksi.</p>
+            </div>
+            <button
+              onClick={onAddMember}
+              className="bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl shadow-lg transition flex items-center justify-center shrink-0"
+            >
+              <Plus size={18} className="mr-2" /> Tambah Member
+            </button>
+          </div>
+
+          {/* Tier summary cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+            {Object.values(MEMBER_TIERS).map(t => {
+              const count = members.filter(m => m.tier === t.id).length;
+              return (
+                <div key={t.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center justify-between">
+                  <div>
+                    <div className="text-slate-400 text-xs uppercase tracking-wider font-bold mb-1">{t.name}</div>
+                    <div className="text-2xl font-black text-white">{count}</div>
+                    <div className="text-[11px] text-slate-500 mt-1">
+                      Cashback {t.cashbackPercent}% • {t.minSpend === 0 ? 'Default' : `Min. ${formatCurrency(t.minSpend)} / 3 bulan`}
+                    </div>
+                  </div>
+                  <Award size={28} className={t.id === 'legend' ? 'text-yellow-400' : t.id === 'pro' ? 'text-blue-400' : 'text-slate-600'} />
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="relative mb-4 max-w-sm">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <Search size={16} className="text-slate-500" />
+            </div>
+            <input
+              type="text"
+              placeholder="Cari nama / no. HP..."
+              value={searchTerm}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-800 text-sm rounded-lg pl-9 pr-3 py-2.5 text-white focus:outline-none focus:border-yellow-400 transition"
+            />
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-950 text-slate-400 text-xs uppercase tracking-wider">
+                  <tr>
+                    <th className="px-6 py-4 font-medium">Nama</th>
+                    <th className="px-6 py-4 font-medium">No. HP</th>
+                    <th className="px-6 py-4 font-medium">Tier</th>
+                    <th className="px-6 py-4 font-medium">Poin</th>
+                    <th className="px-6 py-4 font-medium">Transaksi 3 Bulan</th>
+                    <th className="px-6 py-4 font-medium">Poin Hangus</th>
+                    <th className="px-6 py-4 font-medium text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {filteredMembers.map(m => {
+                    const tierInfo = MEMBER_TIERS[m.tier] || MEMBER_TIERS.rookie;
+                    const spend = getMemberSpend3Months(m.id, transactions, nowTs);
+                    const points = getEffectivePoints(m, nowTs);
+                    const expiry = getPointsExpiryDate(m);
+                    return (
+                      <tr key={m.id} className="hover:bg-slate-800/40 transition">
+                        <td className="px-6 py-4">
+                          <div className="font-medium text-white">{m.name}</div>
+                          <div className="text-[11px] text-slate-500">Gabung {new Date(m.joinedAt).toLocaleDateString('id-ID')}</div>
+                        </td>
+                        <td className="px-6 py-4 text-slate-400">{m.phone}</td>
+                        <td className="px-6 py-4">
+                          <span className={`text-[11px] font-bold px-2.5 py-1 rounded-lg ${tierBadgeClasses[m.tier] || tierBadgeClasses.rookie}`}>
+                            {tierInfo.name}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="text-yellow-400 font-bold">{points.toLocaleString('id-ID')}</span>
+                          <div className="text-[11px] text-slate-500">= {formatCurrency(points * POINT_VALUE_RUPIAH)}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-slate-300">{formatCurrency(spend)}</div>
+                          <div className="text-[11px] text-slate-500">{nextTierHint(spend)}</div>
+                        </td>
+                        <td className="px-6 py-4 text-xs text-slate-400">
+                          {points > 0 ? expiry.toLocaleDateString('id-ID') : '-'}
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex justify-end space-x-2">
+                            <button
+                              onClick={() => onViewLog(m)}
+                              className="p-2 bg-slate-950/50 hover:bg-yellow-400/20 text-slate-500 hover:text-yellow-400 rounded-lg transition border border-slate-800 hover:border-yellow-400/30"
+                              title="Riwayat Poin"
+                            >
+                              <FileText size={16} />
+                            </button>
+                            <button
+                              onClick={() => onDeleteMember(m)}
+                              className="p-2 bg-slate-950/50 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-lg transition border border-slate-800 hover:border-red-500/30"
+                              title="Hapus Member"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filteredMembers.length === 0 && (
+                    <tr>
+                      <td colSpan="7" className="px-6 py-10 text-center text-slate-500 text-sm">
+                        {members.length === 0 ? 'Belum ada member terdaftar. Klik "Tambah Member" untuk mulai.' : 'Tidak ada member yang cocok dengan pencarian.'}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function PointLogModal({ member, logs, onClose }) {
+      const typeStyle = {
+        welcome: { label: 'Welcome Bonus', cls: 'text-green-400' },
+        earn: { label: 'Poin Didapat', cls: 'text-green-400' },
+        redeem: { label: 'Tukar Poin', cls: 'text-red-400' },
+        expire: { label: 'Poin Hangus', cls: 'text-slate-500' },
+      };
+      return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in flex flex-col max-h-[85vh]">
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950 shrink-0">
+              <div>
+                <h3 className="font-bold text-white flex items-center text-lg">
+                  <FileText size={18} className="mr-2 text-yellow-400" /> Riwayat Poin
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">{member.name} • saldo {getEffectivePoints(member, Date.now()).toLocaleString('id-ID')} poin</p>
+              </div>
+              <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20} /></button>
+            </div>
+            <div className="p-4 overflow-y-auto space-y-2">
+              {logs.length === 0 && (
+                <div className="text-center text-slate-500 text-sm py-8">Belum ada mutasi poin.</div>
+              )}
+              {logs.map(l => {
+                const st = typeStyle[l.type] || typeStyle.earn;
+                return (
+                  <div key={l.id} className="bg-slate-950 border border-slate-800 rounded-lg p-3 flex items-center justify-between">
+                    <div>
+                      <div className={`text-sm font-semibold ${st.cls}`}>{st.label}</div>
+                      <div className="text-[11px] text-slate-500">{l.note}</div>
+                      <div className="text-[10px] text-slate-600">{new Date(l.timestamp).toLocaleString('id-ID')}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className={`font-bold ${l.points >= 0 ? 'text-green-400' : 'text-red-400'}`}>{l.points >= 0 ? '+' : ''}{l.points}</div>
+                      <div className="text-[10px] text-slate-500">saldo {l.balanceAfter}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function AddMemberModal({ onClose, onAdd }) {
+      const [name, setName] = useState('');
+      const [phone, setPhone] = useState('');
+
+      const canSubmit = name.trim().length > 0 && phone.trim().length > 0;
+
+      return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in">
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+              <h3 className="font-bold text-white flex items-center text-lg">
+                <Users size={18} className="mr-2 text-yellow-400" /> Tambah Member Baru
+              </h3>
+              <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20} /></button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="text-sm font-medium text-slate-300 block mb-2">Nama Lengkap</label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="cth. Budi Santoso"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-yellow-400 text-sm"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-slate-300 block mb-2">No. WhatsApp / HP</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Phone size={14} className="text-slate-500" />
+                  </div>
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="cth. 081234567890"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-4 py-3 text-white focus:outline-none focus:border-yellow-400 text-sm"
+                  />
+                </div>
+              </div>
+
+              <p className="text-[11px] text-slate-500 bg-slate-950/50 p-3 rounded-lg border border-slate-800">
+                Member baru otomatis mulai di tier <strong className="text-slate-300">Rookie</strong> (cashback {MEMBER_TIERS.rookie.cashbackPercent}%) dan mendapat <strong className="text-yellow-400">{WELCOME_BONUS_POINTS} poin</strong> welcome bonus. Tier naik otomatis berdasarkan total transaksi 3 bulan terakhir.
+              </p>
+
+              <button
+                onClick={() => canSubmit && onAdd(name, phone)}
+                disabled={!canSubmit}
+                className="w-full bg-yellow-400 text-slate-900 font-bold py-3.5 rounded-xl shadow-lg hover:bg-yellow-500 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+              >
+                <Check size={18} className="mr-2" /> Simpan Member
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     // --- FINANCIAL SUMMARY & REPORTS VIEW ---
-    function DashboardAnalytics({ transactions, inventory, onDeleteTransaction, onViewReceipt }) {
+    function DashboardAnalytics({ transactions, inventory, cancelLogs = [], onDeleteTransaction, onViewReceipt }) {
       // Setup state for date filtering
       const getInitialDateStr = () => {
         const wibOffset = 7 * 60 * 60 * 1000; // 7 hours in ms
@@ -2071,6 +3016,14 @@
       const { startMs: cycleStartMs, endMs: cycleEndMs } = getCycleRange(selectedDateStr);
 
       const filteredTrx = transactions.filter(t => t.timestamp >= cycleStartMs && t.timestamp < cycleEndMs);
+
+      // Cancelled-session audit log for the same business day
+      const filteredCancels = cancelLogs.filter(l => l.timestamp >= cycleStartMs && l.timestamp < cycleEndMs);
+      const cancelledPotential = filteredCancels.reduce((sum, l) => sum + (l.expectedTotal || 0), 0);
+      const CANCEL_FLAG_MINUTES = 5; // played longer than this => flagged as suspicious
+      const isSuspiciousCancel = (l) => l.expectedTotal > 0 && (l.prepaidTimeFinished || l.elapsedMinutes >= CANCEL_FLAG_MINUTES);
+      const suspiciousCount = filteredCancels.filter(isSuspiciousCancel).length;
+      const formatMinutes = (min) => `${Math.floor(min / 60) > 0 ? Math.floor(min / 60) + 'j ' : ''}${min % 60}m`;
       
       const totalRevenue = filteredTrx.reduce((sum, t) => sum + t.grandTotal, 0);
       const rentalRevenue = filteredTrx.reduce((sum, t) => sum + (t.rentalTotal || 0), 0);
@@ -2256,12 +3209,13 @@
                         <div className="font-semibold text-white mb-1">
                           {trx.type === 'walk-in' ? 'Walk-in FnB Sale' : `Session - ${trx.unit_name}`}
                         </div>
-                        <div className="text-xs text-slate-400 flex items-center">
-                          <Clock size={12} className="mr-1" />
-                          {new Date(trx.timestamp).toLocaleTimeString('id-ID')} 
-                          <span className="mx-2">•</span> 
-                          {trx.paymentMethod === 'QRIS' ? <CreditCard size={12} className="mr-1 text-purple-400"/> : <Banknote size={12} className="mr-1 text-yellow-400"/>}
-                          {trx.paymentMethod}
+                        <div className="text-xs text-slate-400 flex items-center flex-wrap gap-x-2">
+                          <span className="flex items-center"><Clock size={12} className="mr-1" />{new Date(trx.timestamp).toLocaleTimeString('id-ID')}</span>
+                          <span>•</span>
+                          <span className="flex items-center">{trx.paymentMethod === 'QRIS' ? <CreditCard size={12} className="mr-1 text-purple-400"/> : <Banknote size={12} className="mr-1 text-yellow-400"/>}{trx.paymentMethod}</span>
+                          {trx.memberName && (
+                            <span className="flex items-center text-blue-300"><Award size={12} className="mr-1" />{trx.memberName}</span>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center space-x-3">
@@ -2314,6 +3268,83 @@
                   <div className="text-center py-10 text-slate-500">No transactions recorded yet.</div>
                 )}
               </div>
+            </div>
+          </div>
+
+          {/* --- CANCELLED UNIT AUDIT LOG --- */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg mt-6">
+            <div className="p-5 border-b border-slate-800 bg-slate-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-white text-lg flex items-center">
+                  <Ban size={18} className="mr-2 text-red-400" /> Log Cancel Unit
+                  {suspiciousCount > 0 && (
+                    <span className="ml-3 text-[10px] font-black bg-red-500 text-white px-2 py-0.5 rounded-full animate-pulse">{suspiciousCount} MENCURIGAKAN</span>
+                  )}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">Setiap sesi yang di-cancel tercatat di sini dan tidak bisa dihapus. Cocokkan dengan uang di laci.</p>
+              </div>
+              <div className="text-xs text-slate-400 flex space-x-4">
+                <span>Total cancel: <span className="text-white font-bold">{filteredCancels.length}</span></span>
+                <span>Potensi tagihan tidak masuk: <span className="text-red-400 font-bold">{formatCurrency(cancelledPotential)}</span></span>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-900 text-slate-400 border-b border-slate-800 text-xs uppercase tracking-wider">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">Waktu Cancel</th>
+                    <th className="px-4 py-3 font-medium">Unit</th>
+                    <th className="px-4 py-3 font-medium">Tipe</th>
+                    <th className="px-4 py-3 font-medium">Durasi Main</th>
+                    <th className="px-4 py-3 font-medium">F&B</th>
+                    <th className="px-4 py-3 font-medium text-right">Seharusnya Ditagih</th>
+                    <th className="px-4 py-3 font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/50">
+                  {filteredCancels.map(l => {
+                    const flagged = isSuspiciousCancel(l);
+                    return (
+                      <tr key={l.id} className={flagged ? 'bg-red-500/5 hover:bg-red-500/10' : 'hover:bg-slate-800/50'}>
+                        <td className="px-4 py-3 text-slate-300 whitespace-nowrap">
+                          <div>{new Date(l.timestamp).toLocaleTimeString('id-ID')}</div>
+                          <div className="text-[11px] text-slate-500">oleh: {l.cancelledByRole === 'admin' ? 'Admin' : 'Kasir/Staff'}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="font-semibold text-white">{l.unitName}</div>
+                          {l.memberName && <div className="text-[11px] text-blue-300">Member: {l.memberName}</div>}
+                        </td>
+                        <td className="px-4 py-3 text-slate-400 text-xs">{l.sessionType === 'prepaid' ? 'Prepaid' : 'Pay As You Go'}</td>
+                        <td className="px-4 py-3 text-slate-300 whitespace-nowrap">
+                          {formatMinutes(l.elapsedMinutes)}
+                          {l.bookedMinutes !== null && <span className="text-[11px] text-slate-500 block">dari {formatMinutes(l.bookedMinutes)} dipesan</span>}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-400">
+                          {l.fnbOrders.length === 0 ? '-' : l.fnbOrders.map((o, i) => (
+                            <div key={i}>{o.qty}x {o.name}</div>
+                          ))}
+                        </td>
+                        <td className="px-4 py-3 text-right font-bold text-red-400 whitespace-nowrap">{formatCurrency(l.expectedTotal)}</td>
+                        <td className="px-4 py-3">
+                          {flagged ? (
+                            <span className="inline-flex items-center text-[11px] font-bold text-red-300 bg-red-500/15 border border-red-500/30 px-2 py-1 rounded-lg">
+                              <AlertTriangle size={11} className="mr-1" />
+                              {l.prepaidTimeFinished ? 'Waktu prepaid sudah habis' : `Sudah main ≥ ${CANCEL_FLAG_MINUTES} menit`}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-slate-500">Wajar (sesi sebentar)</span>
+                          )}
+                          {l.note && <div className="text-[11px] text-slate-500 mt-1 truncate max-w-[180px]">Catatan: {l.note}</div>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filteredCancels.length === 0 && (
+                    <tr><td colSpan="7" className="text-center py-8 text-slate-500">Tidak ada unit yang di-cancel pada tanggal ini.</td></tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
